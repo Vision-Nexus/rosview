@@ -19,6 +19,24 @@ describe('parseImageConfig', () => {
     expect(config.backgroundColor).toBe(defaultImageConfig().backgroundColor);
   });
 
+  it('parses an explicit foxglove.ImageAnnotations topic', () => {
+    expect(parseImageConfig({
+      annotationTopic: '/warehouse/front_camera/annotations',
+    }).annotationTopic).toBe('/warehouse/front_camera/annotations');
+  });
+
+  it('parses an explicit foxglove.SceneUpdate mesh topic', () => {
+    expect(parseImageConfig({ meshTopic: '/warehouse/safety_zones' }).meshTopic).toBe(
+      '/warehouse/safety_zones',
+    );
+  });
+
+  it('parses annotation and scene mesh visibility independently', () => {
+    const config = parseImageConfig({ annotationVisible: false, meshVisible: false });
+    expect(config.annotationVisible).toBe(false);
+    expect(config.meshVisible).toBe(false);
+  });
+
   it('does not expose removed overlay/annotation fields from legacy input', () => {
     const config = parseImageConfig({
       overlays: [{ topic: '/x', opacity: 1, blendMode: 'alpha', enabled: true }],

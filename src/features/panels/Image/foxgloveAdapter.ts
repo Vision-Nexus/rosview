@@ -21,6 +21,10 @@ import { parseImageConfig } from './schema';
 const KNOWN_KEYS = [
   'topic',
   'topicPath',
+  'annotationTopic',
+  'annotationVisible',
+  'meshTopic',
+  'meshVisible',
   'backgroundColor',
   'showStatusText',
   'fitMode',
@@ -62,6 +66,10 @@ function toConfigForFoxgloveType(
       ? { topicPath: c.topic }
       : { topic: c.topic }),
     backgroundColor: c.backgroundColor,
+    annotationTopic: c.annotationTopic,
+    annotationVisible: c.annotationVisible,
+    meshTopic: c.meshTopic,
+    meshVisible: c.meshVisible,
     showStatusText: c.showStatusText,
     fitMode: c.fitMode,
     smoothing: c.smoothing,

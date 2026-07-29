@@ -16,6 +16,8 @@ import { useTopicSeq } from '@/core/pipeline/useMessageBus';
 import { isRawImageMessage, isRawImageTopicSchema, isCompressedImageMessage, depthEncodingFromFormat, IMAGE_PANEL_TOPIC_INCLUDES } from './core/imageTypes';
 import { applyDepthTopicPreset, defaultDepthMaxValue, defaultDepthMinValue } from './core/depthColorDefaults';
 import type { ImageConfig } from './defaults';
+import { isImageAnnotationsSchema } from './core/imageAnnotations';
+import { isSceneUpdateSchema } from './core/sceneMesh';
 
 const DEPTH_ENCODINGS = new Set(['mono16', '16uc1', '32fc1']);
 
@@ -129,6 +131,52 @@ export function ImagePanelSettings({
               topics={topics}
               typeIncludes={[...IMAGE_PANEL_TOPIC_INCLUDES]}
               placeholder={formatMessage({ id: 'panels.image.settings.field.topic.placeholder' })}
+            />
+          </SettingsField>
+          <SettingsField
+            label={formatMessage({ id: 'panels.image.settings.field.annotationTopic.label' })}
+            help={formatMessage({ id: 'panels.image.settings.field.annotationTopic.help' })}
+          >
+            <TopicAutocomplete
+              value={config.annotationTopic}
+              onChange={(annotationTopic) => setConfig({ ...config, annotationTopic })}
+              topics={topics}
+              topicTypeMatches={isImageAnnotationsSchema}
+              placeholder={formatMessage({
+                id: 'panels.image.settings.field.annotationTopic.placeholder',
+              })}
+            />
+          </SettingsField>
+          <SettingsField
+            label={formatMessage({ id: 'panels.image.settings.field.annotationVisible' })}
+            orientation="row"
+          >
+            <SettingsSwitch
+              checked={config.annotationVisible}
+              onChange={(annotationVisible) => setConfig({ ...config, annotationVisible })}
+            />
+          </SettingsField>
+          <SettingsField
+            label={formatMessage({ id: 'panels.image.settings.field.meshTopic.label' })}
+            help={formatMessage({ id: 'panels.image.settings.field.meshTopic.help' })}
+          >
+            <TopicAutocomplete
+              value={config.meshTopic}
+              onChange={(meshTopic) => setConfig({ ...config, meshTopic })}
+              topics={topics}
+              topicTypeMatches={isSceneUpdateSchema}
+              placeholder={formatMessage({
+                id: 'panels.image.settings.field.meshTopic.placeholder',
+              })}
+            />
+          </SettingsField>
+          <SettingsField
+            label={formatMessage({ id: 'panels.image.settings.field.meshVisible' })}
+            orientation="row"
+          >
+            <SettingsSwitch
+              checked={config.meshVisible}
+              onChange={(meshVisible) => setConfig({ ...config, meshVisible })}
             />
           </SettingsField>
         </SettingsSection>
