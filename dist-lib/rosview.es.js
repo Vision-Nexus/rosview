@@ -3423,7 +3423,7 @@ function _c({ config: e, setConfig: t, topics: r }) {
 }
 //#endregion
 //#region src/features/panels/ThreeD/definition.tsx
-var vc = rn(async () => ({ default: (await import("./ThreeDPanel-XdIs45zj.js")).ThreeDPanel })), yc = {
+var vc = rn(async () => ({ default: (await import("./ThreeDPanel-DTerEBXP.js")).ThreeDPanel })), yc = {
 	type: "3D",
 	defaultTitle: "3D View",
 	autoLayoutHints: { alwaysInclude: !0 },

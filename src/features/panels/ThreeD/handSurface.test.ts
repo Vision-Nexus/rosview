@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import {
@@ -35,6 +37,41 @@ const BONE_NAMES = [
   'pinky-finger-phalanx-distal',
   'pinky-finger-tip',
 ] as const;
+
+type Point3 = [number, number, number];
+
+function glbHandedness(filename: 'left.glb' | 'right.glb'): { digest: string; sign: number } {
+  const bytes = readFileSync(new URL(`./assets/generic-hand/${filename}`, import.meta.url));
+  const jsonLength = bytes.readUInt32LE(12);
+  const document = JSON.parse(bytes.subarray(20, 20 + jsonLength).toString('utf8').trim()) as {
+    nodes: Array<{ name?: string; translation?: Point3 }>;
+  };
+  const position = (name: string): Point3 => {
+    const value = document.nodes.find((node) => node.name === name)?.translation;
+    if (!value) throw new Error(`missing ${name}`);
+    return value;
+  };
+  const subtract = (a: Point3, b: Point3): Point3 => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+  const dot = (a: Point3, b: Point3): number => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  const scale = (a: Point3, value: number): Point3 => [a[0] * value, a[1] * value, a[2] * value];
+  const normalize = (a: Point3): Point3 => scale(a, 1 / Math.sqrt(dot(a, a)));
+  const cross = (a: Point3, b: Point3): Point3 => [
+    a[1] * b[2] - a[2] * b[1],
+    a[2] * b[0] - a[0] * b[2],
+    a[0] * b[1] - a[1] * b[0],
+  ];
+  const wrist = position('wrist');
+  const xAxis = normalize(
+    subtract(position('index-finger-phalanx-proximal'), position('pinky-finger-phalanx-proximal')),
+  );
+  const middle = subtract(position('middle-finger-phalanx-proximal'), wrist);
+  const yAxis = normalize(subtract(middle, scale(xAxis, dot(middle, xAxis))));
+  const zAxis = normalize(cross(xAxis, yAxis));
+  return {
+    digest: createHash('sha256').update(bytes).digest('hex'),
+    sign: dot(subtract(position('thumb-metacarpal'), wrist), zAxis),
+  };
+}
 
 const FIELDS = [
   { name: 'x', offset: 0, datatype: 7, count: 1 },
@@ -149,6 +186,15 @@ describe('WebXR generic hand surface', () => {
     expect(() => new HandSurfaceRig(rigRoot(), 'right')).toThrow(
       'generic-hand GLB handedness does not match right',
     );
+  });
+
+  it('pins the upstream left and right GLBs as a mirrored pair', () => {
+    const left = glbHandedness('left.glb');
+    const right = glbHandedness('right.glb');
+    expect(left.digest).toBe('bc67783144944ea1cda54d9247885825ea5fb9d4651469fe7d00be517a5c2b87');
+    expect(right.digest).toBe('291790c14f7f88a7f9bd35330c47392ed8e8d395ae6728f4bb7089f1bc1f2b96');
+    expect(left.sign).toBeLessThan(0);
+    expect(right.sign).toBeGreaterThan(0);
   });
 
   it('hides only the hand with a low-confidence or non-finite point', () => {

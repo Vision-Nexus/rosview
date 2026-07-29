@@ -16,8 +16,19 @@ import {
 
 export function HandSurfaceLayer({ player, panelId }: { player: Player; panelId: string }) {
   const assets = useLoader(GLTFLoader, [leftHandAssetUrl, rightHandAssetUrl]) as GLTF[];
-  const leftRig = useMemo(() => new HandSurfaceRig(cloneSkeleton(assets[0].scene), 'left'), [assets]);
-  const rightRig = useMemo(() => new HandSurfaceRig(cloneSkeleton(assets[1].scene), 'right'), [assets]);
+  const rigs = useMemo(() => {
+    try {
+      return {
+        left: new HandSurfaceRig(cloneSkeleton(assets[0].scene), 'left'),
+        right: new HandSurfaceRig(cloneSkeleton(assets[1].scene), 'right'),
+      };
+    } catch (error) {
+      console.error('hand surface disabled:', error);
+      return null;
+    }
+  }, [assets]);
+  const leftRig = rigs?.left;
+  const rightRig = rigs?.right;
   const pointsRef = useRef(createHandPointState());
   const previousTimeRef = useRef<bigint | null>(null);
   const lastSampleTimeRef = useRef<bigint | null>(null);
@@ -29,6 +40,7 @@ export function HandSurfaceLayer({ player, panelId }: { player: Player; panelId:
   }, [invalidate]);
 
   useEffect(() => {
+    if (!leftRig || !rightRig) return;
     const consumerId = `${panelId}:hand-surface`;
     player.registerHighFrequencyConsumer(consumerId, {
       topic: HANDPOSE_POINTS_TOPIC,
@@ -56,6 +68,7 @@ export function HandSurfaceLayer({ player, panelId }: { player: Player; panelId:
   }, [leftRig, panelId, player, rightRig]);
 
   useEffect(() => {
+    if (!leftRig || !rightRig) return;
     return player.subscribeCurrentTime((time) => {
       const current = BigInt(time.sec) * 1_000_000_000n + BigInt(time.nsec);
       const sampleTime = lastSampleTimeRef.current;
@@ -70,6 +83,8 @@ export function HandSurfaceLayer({ player, panelId }: { player: Player; panelId:
       previousTimeRef.current = current;
     });
   }, [leftRig, player, rightRig]);
+
+  if (!leftRig || !rightRig) return null;
 
   return (
     <>
