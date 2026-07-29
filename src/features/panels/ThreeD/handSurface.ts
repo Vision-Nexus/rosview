@@ -214,6 +214,11 @@ export function shouldClearHandSurface(previousNs: bigint | null, currentNs: big
   return delta < 0n || delta > 250_000_000n;
 }
 
+export function isHandSurfaceSampleCurrent(sampleNs: bigint, currentNs: bigint): boolean {
+  const delta = sampleNs >= currentNs ? sampleNs - currentNs : currentNs - sampleNs;
+  return delta <= 250_000_000n;
+}
+
 function finiteVector(vector: THREE.Vector3): boolean {
   return Number.isFinite(vector.x) && Number.isFinite(vector.y) && Number.isFinite(vector.z);
 }

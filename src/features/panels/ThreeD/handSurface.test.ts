@@ -4,6 +4,7 @@ import {
   HandSurfaceRig,
   createHandPointState,
   parseHandPointCloud2,
+  isHandSurfaceSampleCurrent,
   shouldClearHandSurface,
 } from './handSurface';
 
@@ -178,6 +179,8 @@ describe('WebXR generic hand surface', () => {
     expect(shouldClearHandSurface(100n, 90n)).toBe(true);
     expect(shouldClearHandSurface(100n, 200_000_000n)).toBe(false);
     expect(shouldClearHandSurface(100n, 300_000_100n)).toBe(true);
+    expect(isHandSurfaceSampleCurrent(100n, 250_000_100n)).toBe(true);
+    expect(isHandSurfaceSampleCurrent(100n, 250_000_101n)).toBe(false);
   });
 
   it('rejects a PointCloud2 without the exact handpose fields', () => {

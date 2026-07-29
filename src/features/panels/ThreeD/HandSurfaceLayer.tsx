@@ -11,6 +11,7 @@ import {
   createHandPointState,
   parseHandPointCloud2,
   shouldClearHandSurface,
+  isHandSurfaceSampleCurrent,
 } from './handSurface';
 
 export function HandSurfaceLayer({ player, panelId }: { player: Player; panelId: string }) {
@@ -19,6 +20,7 @@ export function HandSurfaceLayer({ player, panelId }: { player: Player; panelId:
   const rightRig = useMemo(() => new HandSurfaceRig(cloneSkeleton(assets[1].scene), 'right'), [assets]);
   const pointsRef = useRef(createHandPointState());
   const previousTimeRef = useRef<bigint | null>(null);
+  const lastSampleTimeRef = useRef<bigint | null>(null);
   const { invalidate } = useThree();
   const invalidateRef = useRef(invalidate);
 
@@ -33,6 +35,8 @@ export function HandSurfaceLayer({ player, panelId }: { player: Player; panelId:
       lane: 'pointcloud',
       mode: 'latest',
       onLatestMessage: (event) => {
+        lastSampleTimeRef.current =
+          BigInt(event.publishTime.sec) * 1_000_000_000n + BigInt(event.publishTime.nsec);
         if (parseHandPointCloud2(event.message, pointsRef.current)) {
           leftRig.update(pointsRef.current, 0);
           rightRig.update(pointsRef.current, 1);
@@ -47,13 +51,18 @@ export function HandSurfaceLayer({ player, panelId }: { player: Player; panelId:
       player.unregisterHighFrequencyConsumer(consumerId);
       leftRig.hide();
       rightRig.hide();
+      lastSampleTimeRef.current = null;
     };
   }, [leftRig, panelId, player, rightRig]);
 
   useEffect(() => {
     return player.subscribeCurrentTime((time) => {
       const current = BigInt(time.sec) * 1_000_000_000n + BigInt(time.nsec);
-      if (shouldClearHandSurface(previousTimeRef.current, current)) {
+      const sampleTime = lastSampleTimeRef.current;
+      if (
+        shouldClearHandSurface(previousTimeRef.current, current) ||
+        (sampleTime != null && !isHandSurfaceSampleCurrent(sampleTime, current))
+      ) {
         const leftChanged = leftRig.hide();
         const rightChanged = rightRig.hide();
         if (leftChanged || rightChanged) invalidateRef.current();
