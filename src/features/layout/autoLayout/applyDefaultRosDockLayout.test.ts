@@ -151,6 +151,31 @@ describe('buildDefaultRosFoxgloveLayoutData', () => {
     expect(imageConfigs.every((config) => !('meshVisible' in config))).toBe(true);
   });
 
+  it('binds each Vision Lab camera only to its matching handpose annotations', () => {
+    const topics: TopicInfo[] = Array.from({ length: 6 }, (_, camera) => [
+      {
+        name: `/robot0/sensor/camera${camera}/compressed`,
+        type: 'foxglove_msgs/msg/CompressedVideo [ros2msg]',
+      },
+      {
+        name: `/robot0/perception/handpose/camera${camera}/image_annotations`,
+        type: 'foxglove.ImageAnnotations',
+      },
+    ]).flat();
+    const data = buildDefaultRosFoxgloveLayoutData(topics);
+    const imageConfigs = Object.values(data.configById).filter(
+      (config) => typeof config.topic === 'string' && config.topic.includes('/sensor/camera'),
+    );
+    expect(imageConfigs).toHaveLength(6);
+    for (const config of imageConfigs) {
+      const camera = /camera([0-5])/.exec(config.topic as string)?.[1];
+      expect(config.annotationTopic).toBe(
+        `/robot0/perception/handpose/camera${camera}/image_annotations`,
+      );
+      expect(config.annotationVisible).toBe(true);
+    }
+  });
+
   it('BVH-only dataset: single 3D panel only; dockview root still wraps to branch for fromJSON', () => {
     const topics: TopicInfo[] = [
       { name: '/bvh/skeleton', type: 'embodiflow_msgs/msg/BvhSkeletonFrame' },
