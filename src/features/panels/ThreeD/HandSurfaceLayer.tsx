@@ -15,8 +15,8 @@ import {
 
 export function HandSurfaceLayer({ player, panelId }: { player: Player; panelId: string }) {
   const assets = useLoader(GLTFLoader, [leftHandAssetUrl, rightHandAssetUrl]) as GLTF[];
-  const leftRig = useMemo(() => new HandSurfaceRig(cloneSkeleton(assets[0].scene)), [assets]);
-  const rightRig = useMemo(() => new HandSurfaceRig(cloneSkeleton(assets[1].scene)), [assets]);
+  const leftRig = useMemo(() => new HandSurfaceRig(cloneSkeleton(assets[0].scene), 'left'), [assets]);
+  const rightRig = useMemo(() => new HandSurfaceRig(cloneSkeleton(assets[1].scene), 'right'), [assets]);
   const pointsRef = useRef(createHandPointState());
   const previousTimeRef = useRef<bigint | null>(null);
   const { invalidate } = useThree();

@@ -100,11 +100,11 @@ function restPosition(index: number): THREE.Vector3 {
   if (index === 0) return new THREE.Vector3(0, 0, 0);
   const finger = index <= 4 ? 0 : Math.floor((index - 5) / 5) + 1;
   const segment = index <= 4 ? index : ((index - 5) % 5) + 1;
-  const x = [0.55, 0.4, 0, -0.3, -0.55][finger];
+  const x = [-0.55, -0.4, 0, 0.3, 0.55][finger];
   return new THREE.Vector3(x, segment * 0.45, finger * 0.03);
 }
 
-function rigFixture(): { root: THREE.Group; rig: HandSurfaceRig } {
+function rigRoot(): THREE.Group {
   const root = new THREE.Group();
   const armature = new THREE.Group();
   armature.name = 'Armature';
@@ -115,7 +115,12 @@ function rigFixture(): { root: THREE.Group; rig: HandSurfaceRig } {
     bone.position.copy(restPosition(index));
     armature.add(bone);
   });
-  return { root, rig: new HandSurfaceRig(root) };
+  return root;
+}
+
+function rigFixture(): { root: THREE.Group; rig: HandSurfaceRig } {
+  const root = rigRoot();
+  return { root, rig: new HandSurfaceRig(root, 'left') };
 }
 
 describe('WebXR generic hand surface', () => {
@@ -136,6 +141,12 @@ describe('WebXR generic hand surface', () => {
     expect(metacarpal.position.distanceTo(wrist.position)).toBeGreaterThan(0);
     expect(metacarpal.position.distanceTo(wrist.position)).toBeLessThan(
       proximal.position.distanceTo(wrist.position),
+    );
+  });
+
+  it('rejects a GLB whose palm geometry contradicts the requested handedness', () => {
+    expect(() => new HandSurfaceRig(rigRoot(), 'right')).toThrow(
+      'generic-hand GLB handedness does not match right',
     );
   });
 

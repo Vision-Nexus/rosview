@@ -258,7 +258,7 @@ export class HandSurfaceRig {
   private readonly yAxis = new THREE.Vector3();
   private readonly zAxis = new THREE.Vector3();
 
-  constructor(root: THREE.Object3D) {
+  constructor(root: THREE.Object3D, expectedHandedness: 'left' | 'right') {
     this.root = root;
     const armature = root.getObjectByName('Armature');
     if (!armature) throw new Error('generic-hand GLB omits Armature');
@@ -288,6 +288,15 @@ export class HandSurfaceRig {
       )
     ) {
       throw new Error('generic-hand GLB has degenerate rest palm');
+    }
+    const thumbPalmSide = this.targetDirection
+      .subVectors(this.restPositions[1], this.restPositions[0])
+      .dot(this.zAxis);
+    if (
+      (expectedHandedness === 'left' && thumbPalmSide >= -1e-6) ||
+      (expectedHandedness === 'right' && thumbPalmSide <= 1e-6)
+    ) {
+      throw new Error(`generic-hand GLB handedness does not match ${expectedHandedness}`);
     }
     this.restBasisInverse.invert();
     root.traverse((object) => {
