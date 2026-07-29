@@ -6,10 +6,6 @@ export interface ImageConfig {
   annotationTopic: string;
   /** Whether the configured ImageAnnotations layer is visible. */
   annotationVisible: boolean;
-  /** Optional foxglove.SceneUpdate topic containing triangle meshes. */
-  meshTopic: string;
-  /** Whether the configured SceneUpdate mesh layer is visible. */
-  meshVisible: boolean;
   // Display
   backgroundColor: string;
   showStatusText: boolean;
@@ -34,8 +30,6 @@ export const defaultImageConfig = (): ImageConfig => ({
   topic: '',
   annotationTopic: '',
   annotationVisible: true,
-  meshTopic: '',
-  meshVisible: true,
   backgroundColor: '#000000',
   showStatusText: true,
   fitMode: 'contain',

@@ -17,7 +17,6 @@ import { isRawImageMessage, isRawImageTopicSchema, isCompressedImageMessage, dep
 import { applyDepthTopicPreset, defaultDepthMaxValue, defaultDepthMinValue } from './core/depthColorDefaults';
 import type { ImageConfig } from './defaults';
 import { isImageAnnotationsSchema } from './core/imageAnnotations';
-import { isSceneUpdateSchema } from './core/sceneMesh';
 
 const DEPTH_ENCODINGS = new Set(['mono16', '16uc1', '32fc1']);
 
@@ -154,29 +153,6 @@ export function ImagePanelSettings({
             <SettingsSwitch
               checked={config.annotationVisible}
               onChange={(annotationVisible) => setConfig({ ...config, annotationVisible })}
-            />
-          </SettingsField>
-          <SettingsField
-            label={formatMessage({ id: 'panels.image.settings.field.meshTopic.label' })}
-            help={formatMessage({ id: 'panels.image.settings.field.meshTopic.help' })}
-          >
-            <TopicAutocomplete
-              value={config.meshTopic}
-              onChange={(meshTopic) => setConfig({ ...config, meshTopic })}
-              topics={topics}
-              topicTypeMatches={isSceneUpdateSchema}
-              placeholder={formatMessage({
-                id: 'panels.image.settings.field.meshTopic.placeholder',
-              })}
-            />
-          </SettingsField>
-          <SettingsField
-            label={formatMessage({ id: 'panels.image.settings.field.meshVisible' })}
-            orientation="row"
-          >
-            <SettingsSwitch
-              checked={config.meshVisible}
-              onChange={(meshVisible) => setConfig({ ...config, meshVisible })}
             />
           </SettingsField>
         </SettingsSection>

@@ -25,16 +25,15 @@ describe('parseImageConfig', () => {
     }).annotationTopic).toBe('/warehouse/front_camera/annotations');
   });
 
-  it('parses an explicit foxglove.SceneUpdate mesh topic', () => {
-    expect(parseImageConfig({ meshTopic: '/warehouse/safety_zones' }).meshTopic).toBe(
-      '/warehouse/safety_zones',
-    );
-  });
-
-  it('parses annotation and scene mesh visibility independently', () => {
-    const config = parseImageConfig({ annotationVisible: false, meshVisible: false });
+  it('drops retired SceneUpdate mesh config while retaining annotation visibility', () => {
+    const config = parseImageConfig({
+      annotationVisible: false,
+      meshTopic: '/robot0/perception/mano/scene',
+      meshVisible: true,
+    });
     expect(config.annotationVisible).toBe(false);
-    expect(config.meshVisible).toBe(false);
+    expect(config).not.toHaveProperty('meshTopic');
+    expect(config).not.toHaveProperty('meshVisible');
   });
 
   it('does not expose removed overlay/annotation fields from legacy input', () => {

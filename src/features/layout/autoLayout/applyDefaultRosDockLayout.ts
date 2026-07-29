@@ -22,7 +22,6 @@ import { heuristicAudioInfoTopics } from '@/features/panels/Audio/core/resolveAu
 import { getPanelDefinition } from '@/features/panels/registry';
 import { isAudioCommonInfoSchema, isJointStateSchema, isRawAudioSchema, isRosImageSchema, normalizeRosSchemaName } from '@/shared/ros/rosMessageTypes';
 import { pickDefaultRawMessagesTopic } from '@/features/layout/autoLayout/pickDefaultRawMessagesTopic';
-import { isSceneUpdateSchema } from '@/features/panels/Image/core/sceneMesh';
 
 function imageTabTitle(topic: string): string {
   const parts = topic.split('/').filter(Boolean);
@@ -133,7 +132,6 @@ function appendFallbackRawMessagesPanel(
 function appendImagePanelsForRow(
   row: (string | null)[],
   configById: Record<string, FoxgloveConfig>,
-  meshTopic?: string,
 ): string[] {
   const ids: string[] = [];
   for (const topic of row) {
@@ -142,7 +140,6 @@ function appendImagePanelsForRow(
     ids.push(id);
     configById[id] = {
       topic,
-      ...(meshTopic ? { meshTopic, meshVisible: true } : {}),
       [FOXGLOVE_PANEL_TITLE_KEY]: imageTabTitle(topic),
     };
   }
@@ -240,8 +237,6 @@ export function buildDefaultRosFoxgloveLayoutData(
 
   const stackParts: FoxgloveMosaicNode[] = [];
   const usedImageTopics = new Set<string>();
-  const sceneMeshTopics = topics.filter((topic) => isSceneUpdateSchema(topic.type));
-  const meshTopic = sceneMeshTopics.length === 1 ? sceneMeshTopics[0]?.name : undefined;
 
   const pickedImageTopics = selectImageTopicsForAutoLayout(topics);
   const hasDepthImageStreams = topics.some(
@@ -250,8 +245,8 @@ export function buildDefaultRosFoxgloveLayoutData(
 
   if (hasDepthImageStreams) {
     const { colorRow, depthRow } = planColorDepthCameraRows(topics);
-    const colorImageIds = appendImagePanelsForRow(colorRow, configById, meshTopic);
-    const depthImageIds = appendImagePanelsForRow(depthRow, configById, meshTopic);
+    const colorImageIds = appendImagePanelsForRow(colorRow, configById);
+    const depthImageIds = appendImagePanelsForRow(depthRow, configById);
     for (const topic of colorRow) {
       if (topic) usedImageTopics.add(topic);
     }
@@ -264,7 +259,7 @@ export function buildDefaultRosFoxgloveLayoutData(
     if (depthMosaic) stackParts.push(depthMosaic);
   } else if (pickedImageTopics.length > 0) {
     for (const row of buildImageRows(pickedImageTopics)) {
-      const imageIds = appendImagePanelsForRow(row, configById, meshTopic);
+      const imageIds = appendImagePanelsForRow(row, configById);
       for (const topic of row) {
         usedImageTopics.add(topic);
       }

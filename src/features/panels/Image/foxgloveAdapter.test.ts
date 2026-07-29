@@ -2,11 +2,12 @@ import { describe, expect, it } from 'vitest';
 import { imageFoxgloveAdapter } from './foxgloveAdapter';
 
 describe('imageFoxgloveAdapter', () => {
-  it('round-trips annotation and scene mesh topics', () => {
+  it('keeps ImageAnnotations and drops retired scene mesh config', () => {
     const decoded = imageFoxgloveAdapter.fromConfig({
       topic: '/warehouse/front_camera/image',
       annotationTopic: '/warehouse/front_camera/annotations',
-      meshTopic: '/warehouse/safety_zones',
+      meshTopic: '/robot0/perception/mano/scene',
+      meshVisible: true,
     });
 
     const exported = imageFoxgloveAdapter.toConfig({
@@ -16,6 +17,7 @@ describe('imageFoxgloveAdapter', () => {
     });
 
     expect(exported.annotationTopic).toBe('/warehouse/front_camera/annotations');
-    expect(exported.meshTopic).toBe('/warehouse/safety_zones');
+    expect(exported).not.toHaveProperty('meshTopic');
+    expect(exported).not.toHaveProperty('meshVisible');
   });
 });

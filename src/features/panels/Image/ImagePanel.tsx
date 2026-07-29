@@ -20,13 +20,6 @@ import { repairH264Seek } from './core/h264SeekRepair';
 import { isH264MessageEvent, toWorkerFrame } from './core/messageFrameAdapter';
 import { applyDepthTopicPreset } from './core/depthColorDefaults';
 import { parseImageAnnotations } from './core/imageAnnotations';
-import { SceneMeshOverlayRenderer } from './core/SceneMeshOverlayRenderer';
-import {
-  inferCameraCalibrationTopic,
-  parseDoubleSphereCalibration,
-  parseSceneMeshes,
-} from './core/sceneMesh';
-import { subscribeSceneMeshTopic } from './core/sceneMeshTopicBroker';
 import type { ImageConfig } from './defaults';
 import { TopicQuickPicker } from '../framework/TopicQuickPicker';
 import { PanelTopicBar } from '../framework/PanelTopicBar';
@@ -64,8 +57,6 @@ export const ImagePanel: React.FC<ImagePanelProps> = (props) => {
     topic,
     annotationTopic,
     annotationVisible,
-    meshTopic,
-    meshVisible,
     backgroundColor,
     showStatusText,
     fitMode,
@@ -83,8 +74,6 @@ export const ImagePanel: React.FC<ImagePanelProps> = (props) => {
   } = props;
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const meshCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  const meshRendererRef = useRef<SceneMeshOverlayRenderer | null>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const workerRef = useRef<Worker | null>(null);
   const workerDisposeTimerRef = useRef<number | null>(null);
@@ -93,36 +82,12 @@ export const ImagePanel: React.FC<ImagePanelProps> = (props) => {
   const seekRepairGenerationRef = useRef(0);
   const lastUiStatusRef = useRef<ImageSurfaceStatus>({ phase: 'idle' });
   const h264ModeRef = useRef(false);
-  const meshRenderOptionsRef = useRef<ImageRenderOptions>({
-    backgroundColor,
-    flipHorizontal,
-    flipVertical,
-    rotationDeg: rotation,
-    smoothing,
-    fitMode,
-  });
   const [status, setStatus] = useState<ImageSurfaceStatus>({ phase: 'idle' });
   const [metrics, setMetrics] = useState<ImageRenderMetrics | null>(null);
   const mainConsumerId = `${panelId}:image-main`;
   const h264ConsumerId = `${panelId}:image-main-h264`;
   const annotationConsumerId = `${panelId}:image-annotations`;
-  const calibrationConsumerId = `${panelId}:image-scene-mesh-calibration`;
   const selectedAnnotationTopic = annotationVisible ? annotationTopic.trim() : '';
-  const selectedMeshTopic = meshVisible ? meshTopic.trim() : '';
-  const selectedCalibrationTopic = inferCameraCalibrationTopic(topic);
-
-  useEffect(() => {
-    const canvas = meshCanvasRef.current;
-    if (!canvas) return;
-    const renderer = new SceneMeshOverlayRenderer(canvas, meshRenderOptionsRef.current);
-    meshRendererRef.current = renderer;
-    return () => {
-      renderer.dispose();
-      if (meshRendererRef.current === renderer) {
-        meshRendererRef.current = null;
-      }
-    };
-  }, []);
 
   // Worker lifecycle: init on mount, dispose on unmount
   useEffect(() => {
@@ -173,14 +138,6 @@ export const ImagePanel: React.FC<ImagePanelProps> = (props) => {
       const data = event.data as ImageRenderWorkerEvent;
       if (data.type === 'metrics') {
         setMetrics(data.metrics);
-        return;
-      }
-      if (data.type === 'rendered') {
-        meshRendererRef.current?.renderImageFrame(
-          data.timestampNs,
-          data.width,
-          data.height,
-        );
         return;
       }
       if (data.type !== 'status') {
@@ -329,39 +286,6 @@ export const ImagePanel: React.FC<ImagePanelProps> = (props) => {
     };
   }, [annotationConsumerId, player, selectedAnnotationTopic]);
 
-  useEffect(() => {
-    const renderer = meshRendererRef.current;
-    renderer?.clearFrames();
-    if (!renderer || !selectedMeshTopic) return;
-    const unsubscribe = subscribeSceneMeshTopic(
-      player,
-      selectedMeshTopic,
-      (frame) => renderer.addFrame(frame),
-    );
-    return () => {
-      unsubscribe();
-      renderer.clearFrames();
-    };
-  }, [player, selectedMeshTopic]);
-
-  useEffect(() => {
-    const renderer = meshRendererRef.current;
-    renderer?.setCalibration(null);
-    if (!renderer || !selectedCalibrationTopic) return;
-    player.registerHighFrequencyConsumer(calibrationConsumerId, {
-      topic: selectedCalibrationTopic,
-      lane: 'pointcloud',
-      mode: 'latest',
-      onLatestMessage: (event) => {
-        const calibration = parseDoubleSphereCalibration(event.message);
-        if (calibration) renderer.setCalibration(calibration);
-      },
-    });
-    return () => {
-      player.unregisterHighFrequencyConsumer(calibrationConsumerId);
-      renderer.setCalibration(null);
-    };
-  }, [calibrationConsumerId, player, selectedCalibrationTopic]);
 
   // Keep the worker's media deadline current. On rewind, rebuild H.264 state
   // from the nearest complete random-access point.
@@ -380,8 +304,6 @@ export const ImagePanel: React.FC<ImagePanelProps> = (props) => {
       if (previousNs != null && nowNs + 5_000_000n < previousNs) {
         const repairGeneration = seekRepairGenerationRef.current;
         const worker = workerRef.current;
-        const renderer = meshRendererRef.current;
-        renderer?.clearFrames();
         const stillImageTopic = worker && topic && !h264ModeRef.current ? topic : null;
         if (worker && topic && h264ModeRef.current) {
           worker.postMessage({
@@ -394,17 +316,13 @@ export const ImagePanel: React.FC<ImagePanelProps> = (props) => {
         }
         const repairTopics = new Set<string>();
         if (stillImageTopic) repairTopics.add(stillImageTopic);
-        if (renderer && selectedMeshTopic) repairTopics.add(selectedMeshTopic);
         if (repairTopics.size > 0 && player.getMessagesInTimeRange) {
           void player.getMessagesInTimeRange({
             start: addMs(time, -2000),
             end: time,
             topics: [...repairTopics],
           }).then((messages) => {
-            if (
-              seekRepairGenerationRef.current !== repairGeneration ||
-              (renderer && meshRendererRef.current !== renderer)
-            ) return;
+            if (seekRepairGenerationRef.current !== repairGeneration) return;
             let latestImage: RosMessageEvent | undefined;
             for (const event of messages) {
               if (
@@ -415,10 +333,6 @@ export const ImagePanel: React.FC<ImagePanelProps> = (props) => {
               ) {
                 latestImage = event;
               }
-              if (renderer && event.topic === selectedMeshTopic) {
-                const frame = parseSceneMeshes(event.message, toNano(event.publishTime));
-                if (frame) renderer.addFrame(frame);
-              }
             }
             if (worker && latestImage) postImageFrame(worker, latestImage);
           });
@@ -426,7 +340,7 @@ export const ImagePanel: React.FC<ImagePanelProps> = (props) => {
       }
       lastPlaybackTimeNsRef.current = nowNs;
     });
-  }, [isPlaying, player, selectedMeshTopic, topic]);
+  }, [isPlaying, player, topic]);
 
   // Send color/depth decode options when they change — triggers immediate redraw in worker
   useEffect(() => {
@@ -458,8 +372,6 @@ export const ImagePanel: React.FC<ImagePanelProps> = (props) => {
       smoothing,
       fitMode,
     };
-    meshRenderOptionsRef.current = options;
-    meshRendererRef.current?.setOptions(options);
     workerRef.current?.postMessage({
       type: 'renderOptions',
       options,
@@ -499,11 +411,6 @@ export const ImagePanel: React.FC<ImagePanelProps> = (props) => {
           ref={canvasRef}
           className="w-full h-full block"
           data-testid="image-panel-canvas"
-        />
-        <canvas
-          ref={meshCanvasRef}
-          className="absolute inset-0 z-[1] h-full w-full pointer-events-none"
-          data-testid="image-panel-scene-mesh-overlay"
         />
         {showStatusText && statusText && (
           <div className="absolute inset-0 flex items-center justify-center pointer-events-none text-white/40 italic text-xs">

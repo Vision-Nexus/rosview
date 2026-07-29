@@ -59,8 +59,6 @@ export function parseImageConfig(input: unknown): ImageConfig {
       typeof input.annotationTopic === 'string' ? input.annotationTopic : base.annotationTopic,
     annotationVisible:
       typeof input.annotationVisible === 'boolean' ? input.annotationVisible : base.annotationVisible,
-    meshTopic: typeof input.meshTopic === 'string' ? input.meshTopic : base.meshTopic,
-    meshVisible: typeof input.meshVisible === 'boolean' ? input.meshVisible : base.meshVisible,
     backgroundColor:
       typeof input.backgroundColor === 'string' ? input.backgroundColor : base.backgroundColor,
     showStatusText:

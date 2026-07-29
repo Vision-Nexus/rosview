@@ -23,6 +23,7 @@ const KNOWN_KEYS = [
   'topicPath',
   'annotationTopic',
   'annotationVisible',
+  // Retired keys remain consumed so legacy layouts cannot re-export them through extras.
   'meshTopic',
   'meshVisible',
   'backgroundColor',
@@ -68,8 +69,6 @@ function toConfigForFoxgloveType(
     backgroundColor: c.backgroundColor,
     annotationTopic: c.annotationTopic,
     annotationVisible: c.annotationVisible,
-    meshTopic: c.meshTopic,
-    meshVisible: c.meshVisible,
     showStatusText: c.showStatusText,
     fitMode: c.fitMode,
     smoothing: c.smoothing,
