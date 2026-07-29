@@ -82,6 +82,8 @@ export default defineConfig({
     /** Library + worker chunks: no .map in dist-lib (smaller publish / vendored copy). */
     sourcemap: false,
     copyPublicDir: false,
+    /** Keep the two pinned generic-hand GLBs self-contained for embedded consumers. */
+    assetsInlineLimit: 128 * 1024,
     lib: {
       entry: {
         rosview: path.join(packageDir, 'src/entrypoints/index.ts'),

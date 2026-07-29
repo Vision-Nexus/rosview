@@ -45,6 +45,8 @@ import {
   type RobotRenderable,
 } from './core/renderables';
 import type { JointStateMsg, TFMessage } from './core/types';
+import { HandSurfaceLayer } from './HandSurfaceLayer';
+import { HANDPOSE_POINTS_TOPIC } from './handSurface';
 
 import {
   defaultThreeDConfig,
@@ -1372,6 +1374,16 @@ const Scene = ({
     () => topics.find((t: TopicInfo) => t.type.includes('PointCloud2'))?.name,
     [topics],
   );
+  const handposePointsTopic = useMemo(
+    () =>
+      topics.some(
+        (topic: TopicInfo) =>
+          topic.name === HANDPOSE_POINTS_TOPIC && topic.type.includes('PointCloud2'),
+      )
+        ? HANDPOSE_POINTS_TOPIC
+        : undefined,
+    [topics],
+  );
   const enabledTopicSettings = useMemo(
     () => topicSettings.filter((entry) => entry.enabled && entry.topic.length > 0),
     [topicSettings],
@@ -1710,6 +1722,7 @@ const Scene = ({
           size={pointSize}
         />
       )}
+      {handposePointsTopic && <HandSurfaceLayer player={player} panelId={panelId} />}
       {laserScanCloud && <PointCloud data={laserScanCloud} color="#f97316" size={0.02} />}
       {occupancyCloud && <PointCloud data={occupancyCloud} color="#a855f7" size={0.04} />}
       {tracks.map((track) => (
