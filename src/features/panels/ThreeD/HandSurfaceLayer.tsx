@@ -1,0 +1,95 @@
+import type { Player } from '@/core/types/player';
+import { useLoader, useThree } from '@react-three/fiber';
+import { useEffect, useMemo, useRef } from 'react';
+import { GLTFLoader, type GLTF } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { clone as cloneSkeleton } from 'three/examples/jsm/utils/SkeletonUtils.js';
+import leftHandAssetUrl from './assets/generic-hand/left.glb?url';
+import rightHandAssetUrl from './assets/generic-hand/right.glb?url';
+import {
+  HANDPOSE_POINTS_TOPIC,
+  HandSurfaceRig,
+  createHandPointState,
+  parseHandPointCloud2,
+  shouldClearHandSurface,
+  isHandSurfaceSampleCurrent,
+} from './handSurface';
+
+export function HandSurfaceLayer({ player, panelId }: { player: Player; panelId: string }) {
+  const assets = useLoader(GLTFLoader, [leftHandAssetUrl, rightHandAssetUrl]) as GLTF[];
+  const rigs = useMemo(() => {
+    try {
+      return {
+        left: new HandSurfaceRig(cloneSkeleton(assets[0].scene), 'left'),
+        right: new HandSurfaceRig(cloneSkeleton(assets[1].scene), 'right'),
+      };
+    } catch (error) {
+      console.error('hand surface disabled:', error);
+      return null;
+    }
+  }, [assets]);
+  const leftRig = rigs?.left;
+  const rightRig = rigs?.right;
+  const pointsRef = useRef(createHandPointState());
+  const previousTimeRef = useRef<bigint | null>(null);
+  const lastSampleTimeRef = useRef<bigint | null>(null);
+  const { invalidate } = useThree();
+  const invalidateRef = useRef(invalidate);
+
+  useEffect(() => {
+    invalidateRef.current = invalidate;
+  }, [invalidate]);
+
+  useEffect(() => {
+    if (!leftRig || !rightRig) return;
+    const consumerId = `${panelId}:hand-surface`;
+    player.registerHighFrequencyConsumer(consumerId, {
+      topic: HANDPOSE_POINTS_TOPIC,
+      lane: 'pointcloud',
+      mode: 'latest',
+      onLatestMessage: (event) => {
+        lastSampleTimeRef.current =
+          BigInt(event.publishTime.sec) * 1_000_000_000n + BigInt(event.publishTime.nsec);
+        if (parseHandPointCloud2(event.message, pointsRef.current)) {
+          leftRig.update(pointsRef.current, 0);
+          rightRig.update(pointsRef.current, 1);
+        } else {
+          leftRig.hide();
+          rightRig.hide();
+        }
+        invalidateRef.current();
+      },
+    });
+    return () => {
+      player.unregisterHighFrequencyConsumer(consumerId);
+      leftRig.hide();
+      rightRig.hide();
+      lastSampleTimeRef.current = null;
+    };
+  }, [leftRig, panelId, player, rightRig]);
+
+  useEffect(() => {
+    if (!leftRig || !rightRig) return;
+    return player.subscribeCurrentTime((time) => {
+      const current = BigInt(time.sec) * 1_000_000_000n + BigInt(time.nsec);
+      const sampleTime = lastSampleTimeRef.current;
+      if (
+        shouldClearHandSurface(previousTimeRef.current, current) ||
+        (sampleTime != null && !isHandSurfaceSampleCurrent(sampleTime, current))
+      ) {
+        const leftChanged = leftRig.hide();
+        const rightChanged = rightRig.hide();
+        if (leftChanged || rightChanged) invalidateRef.current();
+      }
+      previousTimeRef.current = current;
+    });
+  }, [leftRig, player, rightRig]);
+
+  if (!leftRig || !rightRig) return null;
+
+  return (
+    <>
+      <primitive object={leftRig.root} />
+      <primitive object={rightRig.root} />
+    </>
+  );
+}

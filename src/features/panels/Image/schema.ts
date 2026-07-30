@@ -55,6 +55,10 @@ export function parseImageConfig(input: unknown): ImageConfig {
 
   return {
     topic: typeof input.topic === 'string' ? input.topic : base.topic,
+    annotationTopic:
+      typeof input.annotationTopic === 'string' ? input.annotationTopic : base.annotationTopic,
+    annotationVisible:
+      typeof input.annotationVisible === 'boolean' ? input.annotationVisible : base.annotationVisible,
     backgroundColor:
       typeof input.backgroundColor === 'string' ? input.backgroundColor : base.backgroundColor,
     showStatusText:

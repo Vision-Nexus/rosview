@@ -21,6 +21,11 @@ import { parseImageConfig } from './schema';
 const KNOWN_KEYS = [
   'topic',
   'topicPath',
+  'annotationTopic',
+  'annotationVisible',
+  // Retired keys remain consumed so legacy layouts cannot re-export them through extras.
+  'meshTopic',
+  'meshVisible',
   'backgroundColor',
   'showStatusText',
   'fitMode',
@@ -62,6 +67,8 @@ function toConfigForFoxgloveType(
       ? { topicPath: c.topic }
       : { topic: c.topic }),
     backgroundColor: c.backgroundColor,
+    annotationTopic: c.annotationTopic,
+    annotationVisible: c.annotationVisible,
     showStatusText: c.showStatusText,
     fitMode: c.fitMode,
     smoothing: c.smoothing,

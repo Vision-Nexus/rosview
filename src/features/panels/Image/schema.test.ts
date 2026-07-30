@@ -19,6 +19,23 @@ describe('parseImageConfig', () => {
     expect(config.backgroundColor).toBe(defaultImageConfig().backgroundColor);
   });
 
+  it('parses an explicit foxglove.ImageAnnotations topic', () => {
+    expect(parseImageConfig({
+      annotationTopic: '/warehouse/front_camera/annotations',
+    }).annotationTopic).toBe('/warehouse/front_camera/annotations');
+  });
+
+  it('drops retired SceneUpdate mesh config while retaining annotation visibility', () => {
+    const config = parseImageConfig({
+      annotationVisible: false,
+      meshTopic: '/robot0/perception/mano/scene',
+      meshVisible: true,
+    });
+    expect(config.annotationVisible).toBe(false);
+    expect(config).not.toHaveProperty('meshTopic');
+    expect(config).not.toHaveProperty('meshVisible');
+  });
+
   it('does not expose removed overlay/annotation fields from legacy input', () => {
     const config = parseImageConfig({
       overlays: [{ topic: '/x', opacity: 1, blendMode: 'alpha', enabled: true }],

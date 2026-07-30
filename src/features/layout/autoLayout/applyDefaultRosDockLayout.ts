@@ -22,10 +22,25 @@ import { heuristicAudioInfoTopics } from '@/features/panels/Audio/core/resolveAu
 import { getPanelDefinition } from '@/features/panels/registry';
 import { isAudioCommonInfoSchema, isJointStateSchema, isRawAudioSchema, isRosImageSchema, normalizeRosSchemaName } from '@/shared/ros/rosMessageTypes';
 import { pickDefaultRawMessagesTopic } from '@/features/layout/autoLayout/pickDefaultRawMessagesTopic';
+import { isImageAnnotationsSchema } from '@/features/panels/Image/core/imageAnnotations';
 
 function imageTabTitle(topic: string): string {
   const parts = topic.split('/').filter(Boolean);
   return parts[parts.length - 1] ?? 'Image';
+}
+
+function handposeAnnotationsByImage(topics: ReadonlyArray<TopicInfo>): ReadonlyMap<string, string> {
+  const available = new Set(
+    topics.filter((topic) => isImageAnnotationsSchema(topic.type)).map((topic) => topic.name),
+  );
+  const result = new Map<string, string>();
+  for (const topic of topics) {
+    const match = /^\/robot0\/sensor\/camera([0-5])\/compressed$/.exec(topic.name);
+    if (!match) continue;
+    const annotation = `/robot0/perception/handpose/camera${match[1]}/image_annotations`;
+    if (available.has(annotation)) result.set(topic.name, annotation);
+  }
+  return result;
 }
 
 /**
@@ -132,6 +147,7 @@ function appendFallbackRawMessagesPanel(
 function appendImagePanelsForRow(
   row: (string | null)[],
   configById: Record<string, FoxgloveConfig>,
+  annotationsByImage: ReadonlyMap<string, string>,
 ): string[] {
   const ids: string[] = [];
   for (const topic of row) {
@@ -140,6 +156,9 @@ function appendImagePanelsForRow(
     ids.push(id);
     configById[id] = {
       topic,
+      ...(annotationsByImage.has(topic)
+        ? { annotationTopic: annotationsByImage.get(topic), annotationVisible: true }
+        : {}),
       [FOXGLOVE_PANEL_TITLE_KEY]: imageTabTitle(topic),
     };
   }
@@ -237,6 +256,7 @@ export function buildDefaultRosFoxgloveLayoutData(
 
   const stackParts: FoxgloveMosaicNode[] = [];
   const usedImageTopics = new Set<string>();
+  const annotationsByImage = handposeAnnotationsByImage(topics);
 
   const pickedImageTopics = selectImageTopicsForAutoLayout(topics);
   const hasDepthImageStreams = topics.some(
@@ -245,8 +265,8 @@ export function buildDefaultRosFoxgloveLayoutData(
 
   if (hasDepthImageStreams) {
     const { colorRow, depthRow } = planColorDepthCameraRows(topics);
-    const colorImageIds = appendImagePanelsForRow(colorRow, configById);
-    const depthImageIds = appendImagePanelsForRow(depthRow, configById);
+    const colorImageIds = appendImagePanelsForRow(colorRow, configById, annotationsByImage);
+    const depthImageIds = appendImagePanelsForRow(depthRow, configById, annotationsByImage);
     for (const topic of colorRow) {
       if (topic) usedImageTopics.add(topic);
     }
@@ -259,7 +279,7 @@ export function buildDefaultRosFoxgloveLayoutData(
     if (depthMosaic) stackParts.push(depthMosaic);
   } else if (pickedImageTopics.length > 0) {
     for (const row of buildImageRows(pickedImageTopics)) {
-      const imageIds = appendImagePanelsForRow(row, configById);
+      const imageIds = appendImagePanelsForRow(row, configById, annotationsByImage);
       for (const topic of row) {
         usedImageTopics.add(topic);
       }

@@ -2,6 +2,7 @@ import type { Time } from '@/core/types/ros';
 import type { RawImageDecodeOptions } from './imageColorMode';
 import type { ImageSurfaceStatus } from './imageTypes';
 import type { H264PressureMode } from './h264Backpressure';
+import type { ImageAnnotationsFrame } from './imageAnnotations';
 
 export interface ImageRenderOptions {
   /** CSS color string (e.g. `#ff0000`) used to fill letterbox/pillarbox and idle canvas. */
@@ -23,6 +24,7 @@ export type ImageWorkerFrameEnvelope =
   | {
       kind: 'compressed';
       receiveTime: Time;
+      publishTime: Time;
       format: string;
       data: Uint8Array;
     }
@@ -30,6 +32,7 @@ export type ImageWorkerFrameEnvelope =
       kind: 'raw';
       receiveTime: Time;
       encoding: string;
+      publishTime: Time;
       width: number;
       height: number;
       step?: number;
@@ -64,6 +67,10 @@ export type ImageRenderWorkerRequest =
       frame: ImageWorkerFrameEnvelope;
     }
   | {
+      type: 'overlay';
+      overlay: ImageAnnotationsFrame | null;
+    }
+  | {
       type: 'reset';
       preserveFrame?: boolean;
     }
@@ -92,4 +99,10 @@ export type ImageRenderWorkerEvent =
   | {
       type: 'metrics';
       metrics: ImageRenderMetrics;
+    }
+  | {
+      type: 'rendered';
+      timestampNs: bigint;
+      width: number;
+      height: number;
     };

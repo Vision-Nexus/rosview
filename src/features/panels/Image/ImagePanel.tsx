@@ -4,7 +4,7 @@ import type { Player } from '@/core/types/player';
 import { useMessagePipeline } from '@/core/pipeline/useMessagePipeline';
 import type { MessageEvent as RosMessageEvent } from '@/core/types/ros';
 import { scheduleFrame } from '@/shared/utils/rafScheduler';
-import { toNano } from '@/shared/utils/time';
+import { addMs, toNano } from '@/shared/utils/time';
 import type { RawImageDecodeOptions } from './core/imageColorMode';
 import type {
   ImageRenderMetrics,
@@ -19,6 +19,7 @@ import {
 import { repairH264Seek } from './core/h264SeekRepair';
 import { isH264MessageEvent, toWorkerFrame } from './core/messageFrameAdapter';
 import { applyDepthTopicPreset } from './core/depthColorDefaults';
+import { parseImageAnnotations } from './core/imageAnnotations';
 import type { ImageConfig } from './defaults';
 import { TopicQuickPicker } from '../framework/TopicQuickPicker';
 import { PanelTopicBar } from '../framework/PanelTopicBar';
@@ -54,6 +55,8 @@ export const ImagePanel: React.FC<ImagePanelProps> = (props) => {
     panelId,
     setConfig,
     topic,
+    annotationTopic,
+    annotationVisible,
     backgroundColor,
     showStatusText,
     fitMode,
@@ -76,12 +79,15 @@ export const ImagePanel: React.FC<ImagePanelProps> = (props) => {
   const workerDisposeTimerRef = useRef<number | null>(null);
   const transferredCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const lastPlaybackTimeNsRef = useRef<bigint | null>(null);
+  const seekRepairGenerationRef = useRef(0);
   const lastUiStatusRef = useRef<ImageSurfaceStatus>({ phase: 'idle' });
   const h264ModeRef = useRef(false);
   const [status, setStatus] = useState<ImageSurfaceStatus>({ phase: 'idle' });
   const [metrics, setMetrics] = useState<ImageRenderMetrics | null>(null);
   const mainConsumerId = `${panelId}:image-main`;
   const h264ConsumerId = `${panelId}:image-main-h264`;
+  const annotationConsumerId = `${panelId}:image-annotations`;
+  const selectedAnnotationTopic = annotationVisible ? annotationTopic.trim() : '';
 
   // Worker lifecycle: init on mount, dispose on unmount
   useEffect(() => {
@@ -254,6 +260,33 @@ export const ImagePanel: React.FC<ImagePanelProps> = (props) => {
     };
   }, [player, mainConsumerId, h264ConsumerId, topic]);
 
+  // Keep annotation delivery on the video lane. The worker selects the
+  // closest publish-time match before drawing over each image frame.
+  useEffect(() => {
+    const worker = workerRef.current;
+    if (!selectedAnnotationTopic || !worker) return;
+
+    player.registerHighFrequencyConsumer(annotationConsumerId, {
+      topic: selectedAnnotationTopic,
+      lane: 'video',
+      mode: 'all',
+      onMessageBatch: (messages) => {
+        for (const event of messages) {
+          const overlay = parseImageAnnotations(event.message);
+          if (overlay) {
+            worker.postMessage({ type: 'overlay', overlay } satisfies ImageRenderWorkerRequest);
+          }
+        }
+      },
+    });
+
+    return () => {
+      player.unregisterHighFrequencyConsumer(annotationConsumerId);
+      worker.postMessage({ type: 'overlay', overlay: null } satisfies ImageRenderWorkerRequest);
+    };
+  }, [annotationConsumerId, player, selectedAnnotationTopic]);
+
+
   // Keep the worker's media deadline current. On rewind, rebuild H.264 state
   // from the nearest complete random-access point.
   useEffect(() => {
@@ -265,8 +298,13 @@ export const ImagePanel: React.FC<ImagePanelProps> = (props) => {
       } satisfies ImageRenderWorkerRequest);
       const nowNs = toNano(time);
       const previousNs = lastPlaybackTimeNsRef.current;
+      if (previousNs !== nowNs) {
+        seekRepairGenerationRef.current += 1;
+      }
       if (previousNs != null && nowNs + 5_000_000n < previousNs) {
+        const repairGeneration = seekRepairGenerationRef.current;
         const worker = workerRef.current;
+        const stillImageTopic = worker && topic && !h264ModeRef.current ? topic : null;
         if (worker && topic && h264ModeRef.current) {
           worker.postMessage({
             type: 'reset',
@@ -274,7 +312,30 @@ export const ImagePanel: React.FC<ImagePanelProps> = (props) => {
           } satisfies ImageRenderWorkerRequest);
           void repairH264Seek(player, worker, topic, time);
         } else {
-          workerRef.current?.postMessage({ type: 'reset' } satisfies ImageRenderWorkerRequest);
+          worker?.postMessage({ type: 'reset' } satisfies ImageRenderWorkerRequest);
+        }
+        const repairTopics = new Set<string>();
+        if (stillImageTopic) repairTopics.add(stillImageTopic);
+        if (repairTopics.size > 0 && player.getMessagesInTimeRange) {
+          void player.getMessagesInTimeRange({
+            start: addMs(time, -2000),
+            end: time,
+            topics: [...repairTopics],
+          }).then((messages) => {
+            if (seekRepairGenerationRef.current !== repairGeneration) return;
+            let latestImage: RosMessageEvent | undefined;
+            for (const event of messages) {
+              if (
+                stillImageTopic &&
+                event.topic === stillImageTopic &&
+                toNano(event.receiveTime) <= nowNs &&
+                (!latestImage || toNano(event.receiveTime) > toNano(latestImage.receiveTime))
+              ) {
+                latestImage = event;
+              }
+            }
+            if (worker && latestImage) postImageFrame(worker, latestImage);
+          });
         }
       }
       lastPlaybackTimeNsRef.current = nowNs;
@@ -303,10 +364,6 @@ export const ImagePanel: React.FC<ImagePanelProps> = (props) => {
 
   // Send render options (flip/rotation/smoothing/fitMode) — triggers immediate redraw
   useEffect(() => {
-    const worker = workerRef.current;
-    if (!worker) {
-      return;
-    }
     const options: ImageRenderOptions = {
       backgroundColor,
       flipHorizontal,
@@ -315,7 +372,10 @@ export const ImagePanel: React.FC<ImagePanelProps> = (props) => {
       smoothing,
       fitMode,
     };
-    worker.postMessage({ type: 'renderOptions', options } satisfies ImageRenderWorkerRequest);
+    workerRef.current?.postMessage({
+      type: 'renderOptions',
+      options,
+    } satisfies ImageRenderWorkerRequest);
   }, [backgroundColor, flipHorizontal, flipVertical, rotation, smoothing, fitMode]);
 
   const statusText = getStatusText(status);
