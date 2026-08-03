@@ -3,6 +3,13 @@
  * Merge order: `files` → `file` → `urls` → `url` (files before URLs).
  */
 
+/** Optional per-source limits for remote range readers. Omitted fields retain the reader defaults. */
+export type RemoteReaderTuning = Readonly<{
+  cacheSizeInBytes?: number;
+  fetchBlockSizeInBytes?: number;
+  maxRequestSizeInBytes?: number;
+}>;
+
 export type DatasetItem = {
   id: string;
   kind: 'file' | 'url';
@@ -10,10 +17,14 @@ export type DatasetItem = {
   name: string;
   file?: File;
   url?: string;
+  /** Immutable remote-object identity used for deduplication and session identity. It does not swap an active reader's URL in place. */
+  readonly sourceId?: string;
   /** Optional manifest metadata (remote list or host-injected). */
   sizeBytes?: number;
   durationSec?: number;
   topicCount?: number;
+  /** Optional tuning for this remote source's range reader. */
+  remoteReader?: RemoteReaderTuning;
   /** Files opened together, e.g. from a directory. Some formats need sibling files to initialize correctly. */
   siblingFiles?: File[];
   /**
@@ -26,9 +37,14 @@ export type DatasetItem = {
   groupId?: string;
 };
 
+/** Stable dataset identity; sourceId excludes the URL so an immutable object remains deduplicated across transport URLs. */
+export function datasetItemIdentity(item: DatasetItem): string {
+  return item.sourceId != undefined ? `source:${item.sourceId}` : item.id;
+}
+
 /** Grouping key for a dataset item: shared by every member of a merged session. */
 export function datasetGroupKey(item: DatasetItem): string {
-  return item.groupId ?? item.id;
+  return item.groupId ?? datasetItemIdentity(item);
 }
 
 /**
@@ -107,10 +123,14 @@ export function resolveAppendGroupId(
 /** One row from host `fileManifest` or remote dataset JSON. */
 export type FileListItem = {
   url: string;
+  /** Immutable remote-object identity used for deduplication and session identity. It does not swap an active reader's URL in place. */
+  readonly sourceId?: string;
   name?: string;
   sizeBytes?: number;
   durationSec?: number;
   topicCount?: number;
+  /** Optional tuning for this remote source's range reader. */
+  remoteReader?: RemoteReaderTuning;
 };
 
 const ROS_EXT = /\.(mcap|bag|db3|hdf5|h5|bvh)$/i;
@@ -175,6 +195,29 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v != null;
 }
 
+function normalizeSourceId(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function normalizePositiveInteger(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.floor(value) : undefined;
+}
+
+export function normalizeRemoteReaderTuning(value: unknown): RemoteReaderTuning | undefined {
+  if (!isRecord(value)) return undefined;
+  const cacheSizeInBytes = normalizePositiveInteger(value.cacheSizeInBytes);
+  const fetchBlockSizeInBytes = normalizePositiveInteger(value.fetchBlockSizeInBytes);
+  const maxRequestSizeInBytes = normalizePositiveInteger(value.maxRequestSizeInBytes);
+  if (cacheSizeInBytes == undefined && fetchBlockSizeInBytes == undefined && maxRequestSizeInBytes == undefined) {
+    return undefined;
+  }
+  return {
+    ...(cacheSizeInBytes != undefined ? { cacheSizeInBytes } : {}),
+    ...(fetchBlockSizeInBytes != undefined ? { fetchBlockSizeInBytes } : {}),
+    ...(maxRequestSizeInBytes != undefined ? { maxRequestSizeInBytes } : {}),
+  };
+}
+
 /** Parse remote JSON array into rows; invalid entries skipped (logged). */
 export function parseRemoteDatasetListJson(json: unknown): FileListItem[] {
   if (!Array.isArray(json)) {
@@ -185,11 +228,21 @@ export function parseRemoteDatasetListJson(json: unknown): FileListItem[] {
     if (!isRecord(row)) continue;
     const url = row.url;
     if (typeof url !== 'string' || !url.trim()) continue;
+    const sourceId = normalizeSourceId(row.sourceId);
     const name = typeof row.name === 'string' ? row.name : undefined;
     const sizeBytes = typeof row.sizeBytes === 'number' ? row.sizeBytes : undefined;
     const durationSec = typeof row.durationSec === 'number' ? row.durationSec : undefined;
     const topicCount = typeof row.topicCount === 'number' ? row.topicCount : undefined;
-    out.push({ url: url.trim(), name, sizeBytes, durationSec, topicCount });
+    const remoteReader = normalizeRemoteReaderTuning(row.remoteReader);
+    out.push({
+      url: url.trim(),
+      ...(sourceId != undefined ? { sourceId } : {}),
+      name,
+      sizeBytes,
+      durationSec,
+      topicCount,
+      ...(remoteReader != undefined ? { remoteReader } : {}),
+    });
   }
   return out;
 }
@@ -197,15 +250,19 @@ export function parseRemoteDatasetListJson(json: unknown): FileListItem[] {
 export function datasetItemsFromListItems(items: FileListItem[]): DatasetItem[] {
   return items.map((row, i) => {
     const u = row.url.trim();
+    const sourceId = normalizeSourceId(row.sourceId);
     const name = row.name?.trim() || u.split('/').pop() || u;
+    const remoteReader = normalizeRemoteReaderTuning(row.remoteReader);
     return {
-      id: `url:${u}:${i}`,
+      id: sourceId != undefined ? `source:${sourceId}` : `url:${u}:${i}`,
       kind: 'url' as const,
       name,
       url: u,
+      ...(sourceId != undefined ? { sourceId } : {}),
       sizeBytes: row.sizeBytes,
       durationSec: row.durationSec,
       topicCount: row.topicCount,
+      ...(remoteReader != undefined ? { remoteReader } : {}),
     };
   });
 }
@@ -214,9 +271,10 @@ export function datasetItemsFromListItems(items: FileListItem[]): DatasetItem[] 
  * Normalize props into a deduplicated dataset list (files first, then URLs).
  */
 export function normalizeRosViewSources(props: RosViewSourceProps): DatasetItem[] {
-  const out: DatasetItem[] = [];
   const seenFileKeys = new Set<string>();
   const seenUrls = new Set<string>();
+  const seenRemoteSourceIds = new Set<string>();
+  const out: DatasetItem[] = [];
 
   const pushFile = (file: File | undefined) => {
     if (!file || !isRosRecordingFilename(file.name)) return;
@@ -246,8 +304,15 @@ export function normalizeRosViewSources(props: RosViewSourceProps): DatasetItem[
   if (Array.isArray(props.fileManifest)) {
     const rows = datasetItemsFromListItems(props.fileManifest);
     for (const item of rows) {
-      if (seenUrls.has(item.url ?? '')) continue;
-      seenUrls.add(item.url ?? '');
+      if (item.sourceId != undefined) {
+        const identity = datasetItemIdentity(item);
+        if (seenRemoteSourceIds.has(identity)) continue;
+        seenRemoteSourceIds.add(identity);
+      } else {
+        const url = item.url!;
+        if (seenUrls.has(url)) continue;
+        seenUrls.add(url);
+      }
       out.push(item);
     }
   }
@@ -262,13 +327,14 @@ export function normalizeRosViewSources(props: RosViewSourceProps): DatasetItem[
   return out;
 }
 
-/** Dedupe by id, keeping first occurrence (caller controls order). */
+/** Dedupe by stable source identity, keeping first occurrence (caller controls order). */
 export function dedupeDatasetItems(items: DatasetItem[]): DatasetItem[] {
   const seen = new Set<string>();
   const out: DatasetItem[] = [];
   for (const item of items) {
-    if (seen.has(item.id)) continue;
-    seen.add(item.id);
+    const identity = datasetItemIdentity(item);
+    if (seen.has(identity)) continue;
+    seen.add(identity);
     out.push(item);
   }
   return out;

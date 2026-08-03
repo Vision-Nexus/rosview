@@ -14,6 +14,7 @@ import { MessageCursor } from "./MessageCursor";
 import { HttpFileReader } from '@/infra/services/HttpFileReader';
 import CachedFilelike from '@/infra/services/CachedFilelike';
 import { resolveWorkerHttpUrl } from '@/shared/utils/resolveWorkerHttpUrl';
+import { normalizeRemoteReaderTuning } from '@/shared/utils/datasetSources';
 import type { LoadProgress } from "./types";
 import type { TransportDiagnostics, WorkerTransportConfig } from "./transport";
 import { SharedPayloadRing } from "./sharedPayloadRing";
@@ -49,9 +50,16 @@ class BagWorker implements IWorkerSerializedSourceWorker {
         resolveWorkerHttpUrl(url),
         knownTotalBytes != null ? { knownTotalBytes } : undefined,
       );
+      const remoteReader = normalizeRemoteReaderTuning(args.remoteReader);
       const readable = new CachedFilelike({
         fileReader,
-        cacheSizeInBytes: resolveRemoteCacheBytes(),
+        cacheSizeInBytes: remoteReader?.cacheSizeInBytes ?? resolveRemoteCacheBytes(),
+        ...(remoteReader?.fetchBlockSizeInBytes != undefined
+          ? { fetchBlockSizeInBytes: remoteReader.fetchBlockSizeInBytes }
+          : {}),
+        ...(remoteReader?.maxRequestSizeInBytes != undefined
+          ? { maxRequestSizeInBytes: remoteReader.maxRequestSizeInBytes }
+          : {}),
       });
       this._cachedReadable = readable;
       // We need to implement Filelike interface for rosbag

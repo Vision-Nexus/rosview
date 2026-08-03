@@ -4,7 +4,7 @@ import type { Readable } from '@/core/types/player';
 import EventEmitter from "eventemitter3";
 
 export type FileStreamEvents = {
-  data: (chunk: Uint8Array) => void;
+  data: (chunk: Uint8Array, offset?: number) => void;
   error: (err: Error) => void;
 };
 
@@ -17,21 +17,22 @@ export interface FileReader {
   fetch(offset: number, length: number): FileStream;
 }
 
-const CACHE_BLOCK_SIZE = 1024 * 1024 * 50; // 50MiB blocks
-const DEFAULT_MAX_REQUEST_SIZE = CACHE_BLOCK_SIZE * 2;
+const CACHE_STORAGE_BLOCK_SIZE = 1024 * 1024;
+const DEFAULT_MAX_REQUEST_SIZE = 8 * 1024 * 1024;
+const DEFAULT_FETCH_BLOCK_SIZE = DEFAULT_MAX_REQUEST_SIZE;
 
 export default class CachedFilelike implements Readable {
   #fileReader: FileReader;
   #cacheSizeInBytes: number = Infinity;
   #maxRequestSizeInBytes: number = DEFAULT_MAX_REQUEST_SIZE;
-  #fetchBlockSizeInBytes: number = CACHE_BLOCK_SIZE;
+  #fetchBlockSizeInBytes: number = DEFAULT_FETCH_BLOCK_SIZE;
   #preferCacheViews = false;
   #fileSize?: number;
   #virtualBuffer: VirtualLRUBuffer;
   #closed: boolean = false;
   #keepReconnectingCallback?: (reconnecting: boolean) => void;
 
-  #currentConnection: { stream: FileStream; remainingRange: Range; kind: "read" | "prefetch" } | undefined;
+  #currentConnection: { stream: FileStream; range: Range; nextOffset: number; kind: "read" | "prefetch" } | undefined;
 
   #readRequests: {
     range: Range;
@@ -62,7 +63,7 @@ export default class CachedFilelike implements Readable {
     );
     this.#fetchBlockSizeInBytes = Math.max(
       1,
-      Math.min(options.fetchBlockSizeInBytes ?? CACHE_BLOCK_SIZE, this.#maxRequestSizeInBytes),
+      Math.min(options.fetchBlockSizeInBytes ?? DEFAULT_FETCH_BLOCK_SIZE, this.#maxRequestSizeInBytes),
     );
     this.#preferCacheViews = options.preferCacheViews ?? false;
     this.#keepReconnectingCallback = options.keepReconnectingCallback;
@@ -75,13 +76,14 @@ export default class CachedFilelike implements Readable {
     }
     const { size } = await this.#fileReader.open();
     this.#fileSize = size;
+    const cacheBlockSize = Math.min(CACHE_STORAGE_BLOCK_SIZE, size);
     if (this.#cacheSizeInBytes >= size) {
-      this.#virtualBuffer = new VirtualLRUBuffer({ size, blockSize: CACHE_BLOCK_SIZE });
+      this.#virtualBuffer = new VirtualLRUBuffer({ size, blockSize: cacheBlockSize });
     } else {
       this.#virtualBuffer = new VirtualLRUBuffer({
         size,
-        blockSize: CACHE_BLOCK_SIZE,
-        numberOfBlocks: Math.ceil(this.#cacheSizeInBytes / CACHE_BLOCK_SIZE) + 2,
+        blockSize: cacheBlockSize,
+        numberOfBlocks: Math.ceil(this.#cacheSizeInBytes / cacheBlockSize) + 2,
       });
     }
   }
@@ -154,7 +156,7 @@ export default class CachedFilelike implements Readable {
           const currentPrefetch = this.#currentConnection?.kind === "prefetch" ? this.#currentConnection : undefined;
           const currentPrefetchMatches =
             currentPrefetch != undefined &&
-            this.#rangeOverlaps(range, currentPrefetch.remainingRange);
+            this.#rangeOverlaps(range, currentPrefetch.range);
           this.#prefetchRequests = [];
           if (currentPrefetch && !currentPrefetchMatches) {
             currentPrefetch.stream.destroy();
@@ -200,14 +202,14 @@ export default class CachedFilelike implements Readable {
     if (
       firstReadRange &&
       this.#currentConnection?.kind === "prefetch" &&
-      !this.#rangeOverlaps(firstReadRange, this.#currentConnection.remainingRange)
+      !this.#rangeOverlaps(firstReadRange, this.#currentConnection.range)
     ) {
       this.#currentConnection.stream.destroy();
       this.#currentConnection = undefined;
     }
 
     if (!this.#currentConnection && firstReadRange) {
-      const readFetchRange = this.#getNextFixedFetchRange(firstReadRange, size);
+      const readFetchRange = this.#getNextFetchRange(firstReadRange, size);
       if (readFetchRange) {
         this.#setConnection(readFetchRange, "read");
         return;
@@ -217,7 +219,7 @@ export default class CachedFilelike implements Readable {
     if (!this.#currentConnection && this.#readRequests.length === 0) {
       const prefetchRange = this.#prefetchRequests[0];
       if (prefetchRange) {
-        const prefetchFetchRange = this.#getNextFixedFetchRange(prefetchRange, size);
+        const prefetchFetchRange = this.#getNextFetchRange(prefetchRange, size);
         if (prefetchFetchRange) {
           this.#setConnection(prefetchFetchRange, "prefetch");
           return;
@@ -226,7 +228,7 @@ export default class CachedFilelike implements Readable {
     }
   }
 
-  #getNextFixedFetchRange(queryRange: Range, fileSize: number): Range | undefined {
+  #getNextFetchRange(queryRange: Range, fileSize: number): Range | undefined {
     if (queryRange.start >= fileSize) {
       return undefined;
     }
@@ -235,20 +237,14 @@ export default class CachedFilelike implements Readable {
     if (!missing) {
       return undefined;
     }
-    return this.#alignToFetchBlock(missing, fileSize);
-  }
-
-  #alignToFetchBlock(range: Range, fileSize: number): Range {
-    const blockSize = this.#fetchBlockSizeInBytes;
-    const start = Math.floor(range.start / blockSize) * blockSize;
-    const end = Math.min(fileSize, start + blockSize);
-    return { start, end };
+    const requestSize = Math.min(this.#fetchBlockSizeInBytes, this.#maxRequestSizeInBytes);
+    return { start: missing.start, end: Math.min(missing.end, missing.start + requestSize) };
   }
 
   #coveredOrInFlightRanges(): Range[] {
     const ranges = this.#virtualBuffer.getRangesWithData().map((range) => ({ ...range }));
     if (this.#currentConnection) {
-      ranges.push({ ...this.#currentConnection.remainingRange });
+      ranges.push({ ...this.#currentConnection.range });
     }
     return this.#mergeRanges(ranges);
   }
@@ -280,7 +276,7 @@ export default class CachedFilelike implements Readable {
     }
 
     const stream = this.#fileReader.fetch(range.start, range.end - range.start);
-    this.#currentConnection = { stream, remainingRange: range, kind };
+    this.#currentConnection = { stream, range, nextOffset: range.start, kind };
 
     stream.on("error", (error: Error) => {
       console.error(`Connection error @ ${range.start}-${range.end}:`, error);
@@ -310,8 +306,7 @@ export default class CachedFilelike implements Readable {
       this.#updateState();
     });
 
-    let bytesRead = 0;
-    stream.on("data", (chunk: Uint8Array) => {
+    stream.on("data", (chunk: Uint8Array, chunkOffset?: number) => {
       const currentConnection = this.#currentConnection;
       if (!currentConnection || stream !== currentConnection.stream) {
         return;
@@ -324,18 +319,13 @@ export default class CachedFilelike implements Readable {
         }
       }
 
-      this.#virtualBuffer.copyFrom(chunk, currentConnection.remainingRange.start);
-      bytesRead += chunk.byteLength;
+      const offset = chunkOffset ?? currentConnection.nextOffset;
+      currentConnection.nextOffset = Math.max(currentConnection.nextOffset, offset + chunk.byteLength);
+      this.#virtualBuffer.copyFrom(chunk, offset);
 
       if (this.#virtualBuffer.hasData(range.start, range.end)) {
         stream.destroy();
         this.#currentConnection = undefined;
-      } else {
-        this.#currentConnection = {
-          stream,
-          remainingRange: { start: range.start + bytesRead, end: range.end },
-          kind,
-        };
       }
 
       this.#updateState();

@@ -65,6 +65,14 @@ export interface PlayerState {
     buffering?: boolean;
     /** Estimated continuous local buffer ahead of the current playback time. */
     bufferedAheadMs?: number;
+    /** Decoded-message look-ahead beyond the current playhead. */
+    prefetchBufferedAheadMs?: number;
+    /** Decoded-message target look-ahead for the current playback speed. */
+    prefetchTargetAheadMs?: number;
+    /** Decoded-message refill threshold for the current playback speed. */
+    prefetchLowWaterMs?: number;
+    /** Whether a decoded-message refill is currently in flight. */
+    prefetchInFlight?: boolean;
     /** Background data quality scan report (session-only). */
     dataQualityReport?: DataQualityReport;
   };

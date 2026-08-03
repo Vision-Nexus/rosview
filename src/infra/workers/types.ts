@@ -1,6 +1,14 @@
 import type { DataQualityReport, Initialization, MessageEvent, Time, TimeRange } from '@/core/types/ros';
 import type { TransportDiagnostics, WorkerTransportConfig } from './transport';
 import type { Range } from '@/shared/utils/ranges';
+import type { RemoteReaderTuning } from '@/shared/utils/datasetSources';
+
+/** Source initialization fields shared by range-capable remote workers. */
+export interface RemoteSourceInitArgs extends Record<string, unknown> {
+  url: string;
+  knownTotalBytes?: number;
+  remoteReader?: RemoteReaderTuning;
+}
 
 export interface MessageIteratorArgs {
   startTime: Time;

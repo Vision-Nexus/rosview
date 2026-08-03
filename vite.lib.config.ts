@@ -55,6 +55,9 @@ export default defineConfig({
       tsconfigPath: './tsconfig.app.json',
       pathsToAliases: false,
       rollupTypes: true,
+      rollupConfig: {
+        newlineKind: 'lf',
+      },
       insertTypesEntry: true,
       copyDtsFiles: false,
     }),

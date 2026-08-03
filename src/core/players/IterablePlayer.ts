@@ -28,7 +28,8 @@ const SLOW_DISTRIBUTION_MS = 16;
 const RANGE_READ_MAX_MESSAGES = 80_000;
 const RANGE_READ_BATCH_MESSAGES = 2048;
 const RANGE_READ_BATCH_WALL_MS = 16;
-const PLAYBACK_PREFETCH_AHEAD_MS = 250;
+const PLAYBACK_PREFETCH_LOW_WATER_MS = 250;
+const PLAYBACK_PREFETCH_TARGET_AHEAD_MS = 1_000;
 const PLAYBACK_PREFETCH_MAX_MESSAGES = 512;
 const PLAYBACK_BUFFERING_DELAY_MS = 500;
 
@@ -259,6 +260,7 @@ export class IterablePlayer implements Player {
     await this._handleTopicSetChange(prevTopics);
     if (subscriptionsChanged) {
       const epoch = this._advancePlaybackEpoch();
+      this._prioritizePlaybackBuffer(epoch, this._currentTime);
       await this._closePlaybackCursor();
       if (!this._isPlaybackEpochCurrent(epoch)) {
         return;
@@ -333,6 +335,7 @@ export class IterablePlayer implements Player {
       return;
     }
     const epoch = this._advancePlaybackEpoch();
+    this._prioritizePlaybackBuffer(epoch, this._currentTime);
     await this._closePlaybackCursor();
     if (!this._isPlaybackEpochCurrent(epoch)) {
       return;
@@ -348,6 +351,7 @@ export class IterablePlayer implements Player {
     await this._handleTopicSetChange(before);
     if (previousSignature !== this._highFrequencyConsumerSignature) {
       const epoch = this._advancePlaybackEpoch();
+      this._prioritizePlaybackBuffer(epoch, this._currentTime);
       await this._closePlaybackCursor();
       if (!this._isPlaybackEpochCurrent(epoch)) {
         return;
@@ -523,6 +527,7 @@ export class IterablePlayer implements Player {
     this._notifyTimeSubscribers(seekTime);
     this._lastPipelineEmitMs = 0;
     this._emitState();
+    this._prioritizePlaybackBuffer(epoch, seekTime);
 
     try {
       await this._closePlaybackCursor();
@@ -602,6 +607,10 @@ export class IterablePlayer implements Player {
   setSpeed(speed: number): void {
     this._speed = Math.min(MAX_PLAYBACK_SPEED, Math.max(0.1, speed));
     this._clock.setSpeed(this._speed, performance.now());
+    this._updatePrefetchProgress();
+    if (this._isPlaying) {
+      this._ensurePlaybackPrefetch(this._playbackEpoch, this._currentTime);
+    }
     this._emitState();
   }
 
@@ -661,6 +670,7 @@ export class IterablePlayer implements Player {
     this._emptyBatchStreak = 0;
     this._emptyBatchStartedAtMs = undefined;
     this._setBuffering(false);
+    this._updatePrefetchProgress();
     return this._playbackEpoch;
   }
 
@@ -972,8 +982,7 @@ export class IterablePlayer implements Player {
     }
     if (slowRead && this._prefetchedMessages.length === 0) {
       this._setBuffering(true);
-      this._clock.seek(this._currentTime, now);
-      this._ensurePlaybackPrefetch(this._playbackEpoch, this._currentTime, 1);
+      this._ensurePlaybackPrefetch(this._playbackEpoch, this._currentTime);
       this._scheduleNextTick();
       return;
     }
@@ -993,7 +1002,6 @@ export class IterablePlayer implements Player {
       this._scheduleNextTick();
       return;
     }
-    const batchDurationMs = Math.max(1, Number(nextNs - currentNs) / 1e6);
     this._currentTime = nextTime;
     this._clock.seek(this._currentTime, performance.now());
     this._drainPrefetchedMessages(this._currentTime);
@@ -1004,6 +1012,7 @@ export class IterablePlayer implements Player {
         const loopEpoch = this._advancePlaybackEpoch();
         this._currentTime = this._initialization.start;
         this._clock.seek(this._currentTime, performance.now());
+        this._prioritizePlaybackBuffer(loopEpoch, this._currentTime);
         await this._closePlaybackCursor();
         if (!this._isPlaybackEpochCurrent(loopEpoch)) {
           return;
@@ -1030,34 +1039,129 @@ export class IterablePlayer implements Player {
       return;
     }
 
-    this._ensurePlaybackPrefetch(epoch, nextTime, batchDurationMs);
+    this._ensurePlaybackPrefetch(epoch, nextTime);
     this._notifyTimeSubscribers(this._currentTime);
     this._maybeEmitPipelineState();
 
     this._scheduleNextTick();
   }
 
-  private _ensurePlaybackPrefetch(epoch: number, nextTime: Time, batchDurationMs: number): void {
+  private _playbackPrefetchTargetAheadMs(): number {
+    return Math.round(PLAYBACK_PREFETCH_TARGET_AHEAD_MS * this._speed);
+  }
+
+  private _playbackPrefetchLowWaterMs(targetAheadMs: number): number {
+    return Math.min(targetAheadMs, Math.round(PLAYBACK_PREFETCH_LOW_WATER_MS * this._speed));
+  }
+
+  private _prefetchedAheadMs(playhead: Time, topics: readonly string[] = this._currentTopics()): number {
+    const selectedTopics = new Set(topics);
+    const playheadNs = toNano(playhead);
+    for (let index = this._prefetchedMessages.length - 1; index >= 0; index -= 1) {
+      const message = this._prefetchedMessages[index];
+      if (!message || !selectedTopics.has(message.topic)) {
+        continue;
+      }
+      return Math.max(0, Number(toNano(message.receiveTime) - playheadNs) / 1e6);
+    }
+    return 0;
+  }
+
+  private _updatePrefetchProgress(
+    bufferedAheadMs = this._prefetchedAheadMs(this._currentTime),
+    targetAheadMs = this._playbackPrefetchTargetAheadMs(),
+    lowWaterMs = this._playbackPrefetchLowWaterMs(targetAheadMs),
+  ): void {
+    const prefetchInFlight = this._prefetchPromise != undefined;
+    const progress = this._state.progress;
     if (
-      this._prefetchPromise ||
-      this._prefetchedMessages.length >= PLAYBACK_PREFETCH_MAX_MESSAGES ||
-      this._currentTopics().length === 0
+      progress.prefetchBufferedAheadMs === bufferedAheadMs &&
+      progress.prefetchTargetAheadMs === targetAheadMs &&
+      progress.prefetchLowWaterMs === lowWaterMs &&
+      progress.prefetchInFlight === prefetchInFlight
     ) {
       return;
     }
+    this._state.progress = {
+      ...progress,
+      prefetchBufferedAheadMs: bufferedAheadMs,
+      prefetchTargetAheadMs: targetAheadMs,
+      prefetchLowWaterMs: lowWaterMs,
+      prefetchInFlight,
+    };
+  }
+
+  private _prioritizePlaybackBuffer(
+    epoch: number,
+    time: Time,
+    topics = this._currentTopics(),
+    targetAheadMs = this._playbackPrefetchTargetAheadMs(),
+  ): void {
+    if (this._state.presence !== "ready" || topics.length === 0) {
+      return;
+    }
+    void this._source.preparePlaybackBuffer({
+      time,
+      topics: [...topics],
+      minAheadMs: targetAheadMs,
+    }).then(
+      (status) => {
+        if (!this._isPlaybackEpochCurrent(epoch) || status.bufferedAheadMs == undefined) {
+          return;
+        }
+        if (this._state.progress.bufferedAheadMs === status.bufferedAheadMs) {
+          return;
+        }
+        this._state.progress = {
+          ...this._state.progress,
+          bufferedAheadMs: status.bufferedAheadMs,
+        };
+      },
+      (err) => {
+        if (this._isPlaybackEpochCurrent(epoch)) {
+          console.warn("IterablePlayer: playback buffer preparation failed", err);
+        }
+      },
+    );
+  }
+
+  private _ensurePlaybackPrefetch(epoch: number, playhead: Time): void {
+    const topics = this._currentTopics();
+    const targetAheadMs = this._playbackPrefetchTargetAheadMs();
+    const lowWaterMs = this._playbackPrefetchLowWaterMs(targetAheadMs);
+    const bufferedAheadMs = this._prefetchedAheadMs(playhead, topics);
+    this._updatePrefetchProgress(bufferedAheadMs, targetAheadMs, lowWaterMs);
+    if (
+      this._prefetchPromise ||
+      this._prefetchedMessages.length >= PLAYBACK_PREFETCH_MAX_MESSAGES ||
+      topics.length === 0 ||
+      bufferedAheadMs >= lowWaterMs
+    ) {
+      return;
+    }
+
     const requestId = ++this._prefetchRequestId;
-    const lookaheadMs = PLAYBACK_PREFETCH_AHEAD_MS * Math.max(1, this._emptyBatchStreak + 1);
-    const endTime = this._clampToRange(addMs(nextTime, lookaheadMs));
-    const durationMs = batchDurationMs + lookaheadMs;
+    const endTime = this._clampToRange(addMs(playhead, targetAheadMs));
+    this._prioritizePlaybackBuffer(epoch, playhead, topics, targetAheadMs);
     this._prefetchStartedAtMs = performance.now();
-    const promise = this._prefetchPlaybackBatch(epoch, requestId, endTime, durationMs);
+    const promise = this._prefetchPlaybackBatch(
+      epoch,
+      requestId,
+      playhead,
+      endTime,
+      targetAheadMs,
+      topics,
+      this._latestOnlyHighFrequencyTopics(),
+    );
     this._prefetchPromise = promise;
+    this._updatePrefetchProgress(bufferedAheadMs, targetAheadMs, lowWaterMs);
     void promise.finally(() => {
       if (this._prefetchRequestId !== requestId) {
         return;
       }
       this._prefetchPromise = undefined;
       this._prefetchStartedAtMs = undefined;
+      this._updatePrefetchProgress();
       this._scheduleNextTick();
     });
   }
@@ -1065,8 +1169,11 @@ export class IterablePlayer implements Player {
   private async _prefetchPlaybackBatch(
     epoch: number,
     requestId: number,
+    playhead: Time,
     endTime: Time,
     durationMs: number,
+    topics: readonly string[],
+    latestOnlyTopics: readonly string[],
   ): Promise<void> {
     try {
       if (!this._cursor) {
@@ -1083,11 +1190,11 @@ export class IterablePlayer implements Player {
           return;
         }
         if (!this._cursor) {
-          const cursorStartTime = this._currentTime;
+          const cursorStartTime = playhead;
           const creationPromise = this._source.getMessageCursor({
             startTime: cursorStartTime,
-            topics: this._currentTopics(),
-            latestOnlyTopics: this._latestOnlyHighFrequencyTopics(),
+            topics: [...topics],
+            latestOnlyTopics: [...latestOnlyTopics],
           });
           this._playbackCursorCreationPromise = creationPromise;
           let cursor: IMessageCursor<unknown>;
@@ -1123,16 +1230,22 @@ export class IterablePlayer implements Player {
       ) {
         return;
       }
-      if (messages.length === 0) {
+      const requestedTopics = new Set(topics);
+      const selectedMessages = messages.filter(
+        (message) =>
+          requestedTopics.has(message.topic) && toNano(message.receiveTime) <= toNano(endTime),
+      );
+      if (selectedMessages.length === 0) {
         this._recordEmptyBatch(performance.now());
         return;
       }
 
       this._emptyBatchStreak = 0;
       this._emptyBatchStartedAtMs = undefined;
-      this._prefetchedMessages.push(...messages);
+      this._prefetchedMessages.push(...selectedMessages);
       this._prefetchedMessages.sort(compareMessagesByReceiveTime);
       this._drainPrefetchedMessages(this._currentTime);
+      this._updatePrefetchProgress();
       if (this._isBuffering) {
         this._setBuffering(false);
         this._clock.seek(this._currentTime, performance.now());
@@ -1140,7 +1253,7 @@ export class IterablePlayer implements Player {
       if (this._debugEnabled) {
         console.debug("[Playback] nextBatch " + JSON.stringify({
           durationMs,
-          count: messages.length,
+          count: selectedMessages.length,
           currentTime: this._currentTime,
           bufferedMessages: this._prefetchedMessages.length,
         }));
@@ -1168,6 +1281,7 @@ export class IterablePlayer implements Player {
       return;
     }
     this._distributeMessages(this._prefetchedMessages.splice(0, count));
+    this._updatePrefetchProgress();
   }
 
   private _setBuffering(buffering: boolean): void {
@@ -1253,6 +1367,10 @@ export class IterablePlayer implements Player {
         fallbackBackfillCount: this._fallbackBackfillCount,
         buffering: this._isBuffering,
         bufferedAheadMs: progress.bufferedAheadMs,
+        prefetchBufferedAheadMs: this._prefetchedAheadMs(this._currentTime),
+        prefetchTargetAheadMs: this._playbackPrefetchTargetAheadMs(),
+        prefetchLowWaterMs: this._playbackPrefetchLowWaterMs(this._playbackPrefetchTargetAheadMs()),
+        prefetchInFlight: this._prefetchPromise != undefined,
         dataQualityReport,
       };
       const prevProgress = this._state.progress;
@@ -1272,6 +1390,10 @@ export class IterablePlayer implements Player {
         nextProgress.fallbackBackfillCount === prevProgress.fallbackBackfillCount &&
         nextProgress.buffering === prevProgress.buffering &&
         nextProgress.bufferedAheadMs === prevProgress.bufferedAheadMs &&
+        nextProgress.prefetchBufferedAheadMs === prevProgress.prefetchBufferedAheadMs &&
+        nextProgress.prefetchTargetAheadMs === prevProgress.prefetchTargetAheadMs &&
+        nextProgress.prefetchLowWaterMs === prevProgress.prefetchLowWaterMs &&
+        nextProgress.prefetchInFlight === prevProgress.prefetchInFlight &&
         isSameDataQualityReport(nextProgress.dataQualityReport, prevProgress.dataQualityReport) &&
         isSameRanges(nextProgress.downloadedByteRanges, prevProgress.downloadedByteRanges) &&
         isSameTimeRanges(nextProgress.parsedMessageRanges, prevProgress.parsedMessageRanges);

@@ -49,7 +49,7 @@ export {
 // Dataset / source utilities
 // (build custom dataset pickers or remote list manifests)
 // ---------------------------------------------------------------------------
-export type { DatasetItem, FileListItem } from '../shared/utils/datasetSources';
+export type { DatasetItem, FileListItem, RemoteReaderTuning } from '../shared/utils/datasetSources';
 export {
   parseRemoteDatasetListJson,
   datasetItemsFromListItems,

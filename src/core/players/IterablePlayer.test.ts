@@ -88,6 +88,7 @@ function makeSource(messages: MessageEvent[]): WorkerSerializedSource {
     getBackfillMessages: vi.fn(async () => messages),
     getMessageCursor: vi.fn(),
     getAdjacentMessage: vi.fn(),
+    preparePlaybackBuffer: vi.fn(async () => ({ ready: true })),
     resolveMessageBatch: vi.fn((batch: MessageEvent[]) => batch),
     resolveMessageForHighFrequencyLane: vi.fn((message: MessageEvent) => message),
     terminate: vi.fn(),
@@ -452,6 +453,246 @@ describe('IterablePlayer playback clock', () => {
       );
 
       unsubscribeTime();
+    } finally {
+      player.close();
+      Object.defineProperty(performance, 'now', {
+        configurable: true,
+        value: oldPerformanceNow,
+      });
+      globalThis.requestAnimationFrame = oldRequestAnimationFrame;
+      globalThis.cancelAnimationFrame = oldCancelAnimationFrame;
+    }
+  });
+
+  it('fills to the target, then refills only below the low-water mark', async () => {
+    let now = 0;
+    let nextRafId = 1;
+    const oldPerformanceNow = performance.now;
+    const oldRequestAnimationFrame = globalThis.requestAnimationFrame;
+    const oldCancelAnimationFrame = globalThis.cancelAnimationFrame;
+    const rafCallbacks = new Map<number, FrameRequestCallback>();
+    Object.defineProperty(performance, 'now', {
+      configurable: true,
+      value: () => now,
+    });
+    globalThis.requestAnimationFrame = vi.fn((cb: FrameRequestCallback) => {
+      const id = nextRafId++;
+      rafCallbacks.set(id, cb);
+      return id;
+    });
+    globalThis.cancelAnimationFrame = vi.fn((id: number) => {
+      rafCallbacks.delete(id);
+    });
+
+    const source = makeSource([]);
+    const cursor = {
+      nextBatch: vi.fn()
+        .mockResolvedValueOnce([makeImageMessageAtMs(1100)])
+        .mockResolvedValueOnce([makeImageMessageAtMs(1900)]),
+      end: vi.fn(async () => undefined),
+    };
+    vi.mocked(source.getMessageCursor).mockResolvedValue(cursor as never);
+    const player = new IterablePlayer(source);
+    const runNextRaf = () => {
+      const id = Math.min(...rafCallbacks.keys());
+      const callback = rafCallbacks.get(id);
+      rafCallbacks.delete(id);
+      callback?.(now);
+    };
+
+    try {
+      await player.initialize({});
+      player.registerSubscriptions('panel', [{ topic: TOPIC, subscriberId: 'panel' }]);
+      await flushAsyncWork();
+      player.play();
+
+      now = 100;
+      runNextRaf();
+      await flushAsyncWork();
+      expect(cursor.nextBatch).toHaveBeenNthCalledWith(1, 1000, {
+        endTime: { sec: 1, nsec: 100_000_000 },
+        maxMessages: 512,
+      });
+
+      now = 500;
+      runNextRaf();
+      await flushAsyncWork();
+      expect(cursor.nextBatch).toHaveBeenCalledTimes(1);
+
+      now = 900;
+      runNextRaf();
+      await flushAsyncWork();
+      expect(cursor.nextBatch).toHaveBeenCalledTimes(2);
+    } finally {
+      player.close();
+      Object.defineProperty(performance, 'now', {
+        configurable: true,
+        value: oldPerformanceNow,
+      });
+      globalThis.requestAnimationFrame = oldRequestAnimationFrame;
+      globalThis.cancelAnimationFrame = oldCancelAnimationFrame;
+    }
+  });
+
+  it('does not count unselected messages towards playback look-ahead', async () => {
+    let now = 0;
+    let nextRafId = 1;
+    const oldPerformanceNow = performance.now;
+    const oldRequestAnimationFrame = globalThis.requestAnimationFrame;
+    const oldCancelAnimationFrame = globalThis.cancelAnimationFrame;
+    const rafCallbacks = new Map<number, FrameRequestCallback>();
+    Object.defineProperty(performance, 'now', {
+      configurable: true,
+      value: () => now,
+    });
+    globalThis.requestAnimationFrame = vi.fn((cb: FrameRequestCallback) => {
+      const id = nextRafId++;
+      rafCallbacks.set(id, cb);
+      return id;
+    });
+    globalThis.cancelAnimationFrame = vi.fn((id: number) => {
+      rafCallbacks.delete(id);
+    });
+
+    const source = makeSource([]);
+    const cursor = {
+      nextBatch: vi.fn()
+        .mockResolvedValueOnce([{ ...makeImageMessageAtMs(1_100), topic: '/unselected' }])
+        .mockResolvedValueOnce([makeImageMessageAtMs(1_100)]),
+      end: vi.fn(async () => undefined),
+    };
+    vi.mocked(source.getMessageCursor).mockResolvedValue(cursor as never);
+    const player = new IterablePlayer(source);
+    const runNextRaf = () => {
+      const id = Math.min(...rafCallbacks.keys());
+      const callback = rafCallbacks.get(id);
+      rafCallbacks.delete(id);
+      callback?.(now);
+    };
+
+    try {
+      await player.initialize({});
+      player.registerSubscriptions('panel', [{ topic: TOPIC, subscriberId: 'panel' }]);
+      await flushAsyncWork();
+      player.play();
+
+      now = 100;
+      runNextRaf();
+      await flushAsyncWork();
+      now = 200;
+      runNextRaf();
+      await flushAsyncWork();
+
+      expect(cursor.nextBatch).toHaveBeenCalledTimes(2);
+      expect(source.getMessageCursor).toHaveBeenCalledWith(expect.objectContaining({ topics: [TOPIC] }));
+    } finally {
+      player.close();
+      Object.defineProperty(performance, 'now', {
+        configurable: true,
+        value: oldPerformanceNow,
+      });
+      globalThis.requestAnimationFrame = oldRequestAnimationFrame;
+      globalThis.cancelAnimationFrame = oldCancelAnimationFrame;
+    }
+  });
+
+  it('scales the target look-ahead with high playback speed', async () => {
+    let now = 0;
+    let nextRafId = 1;
+    const oldPerformanceNow = performance.now;
+    const oldRequestAnimationFrame = globalThis.requestAnimationFrame;
+    const oldCancelAnimationFrame = globalThis.cancelAnimationFrame;
+    const rafCallbacks = new Map<number, FrameRequestCallback>();
+    Object.defineProperty(performance, 'now', {
+      configurable: true,
+      value: () => now,
+    });
+    globalThis.requestAnimationFrame = vi.fn((cb: FrameRequestCallback) => {
+      const id = nextRafId++;
+      rafCallbacks.set(id, cb);
+      return id;
+    });
+    globalThis.cancelAnimationFrame = vi.fn((id: number) => {
+      rafCallbacks.delete(id);
+    });
+
+    const source = makeSource([]);
+    const cursor = {
+      nextBatch: vi.fn(async () => [makeImageMessageAt(10)]),
+      end: vi.fn(async () => undefined),
+    };
+    vi.mocked(source.getMessageCursor).mockResolvedValue(cursor as never);
+    const player = new IterablePlayer(source);
+
+    try {
+      await player.initialize({});
+      player.registerSubscriptions('panel', [{ topic: TOPIC, subscriberId: 'panel' }]);
+      await flushAsyncWork();
+      player.setSpeed(10);
+      player.play();
+
+      now = 100;
+      const id = Math.min(...rafCallbacks.keys());
+      const callback = rafCallbacks.get(id);
+      rafCallbacks.delete(id);
+      callback?.(now);
+      await flushAsyncWork();
+
+      expect(cursor.nextBatch).toHaveBeenCalledWith(10_000, {
+        endTime: { sec: 10, nsec: 0 },
+        maxMessages: 512,
+      });
+      expect(source.preparePlaybackBuffer).toHaveBeenLastCalledWith({
+        time: { sec: 1, nsec: 0 },
+        topics: [TOPIC],
+        minAheadMs: 10_000,
+      });
+    } finally {
+      player.close();
+      Object.defineProperty(performance, 'now', {
+        configurable: true,
+        value: oldPerformanceNow,
+      });
+      globalThis.requestAnimationFrame = oldRequestAnimationFrame;
+      globalThis.cancelAnimationFrame = oldCancelAnimationFrame;
+    }
+  });
+
+  it('does not prefetch when no topics are active', async () => {
+    let now = 0;
+    let nextRafId = 1;
+    const oldPerformanceNow = performance.now;
+    const oldRequestAnimationFrame = globalThis.requestAnimationFrame;
+    const oldCancelAnimationFrame = globalThis.cancelAnimationFrame;
+    const rafCallbacks = new Map<number, FrameRequestCallback>();
+    Object.defineProperty(performance, 'now', {
+      configurable: true,
+      value: () => now,
+    });
+    globalThis.requestAnimationFrame = vi.fn((cb: FrameRequestCallback) => {
+      const id = nextRafId++;
+      rafCallbacks.set(id, cb);
+      return id;
+    });
+    globalThis.cancelAnimationFrame = vi.fn((id: number) => {
+      rafCallbacks.delete(id);
+    });
+
+    const source = makeSource([]);
+    const player = new IterablePlayer(source);
+
+    try {
+      await player.initialize({});
+      player.play();
+      now = 100;
+      const id = Math.min(...rafCallbacks.keys());
+      const callback = rafCallbacks.get(id);
+      rafCallbacks.delete(id);
+      callback?.(now);
+      await flushAsyncWork();
+
+      expect(source.getMessageCursor).not.toHaveBeenCalled();
+      expect(source.preparePlaybackBuffer).not.toHaveBeenCalled();
     } finally {
       player.close();
       Object.defineProperty(performance, 'now', {
@@ -1109,6 +1350,12 @@ describe('IterablePlayer playback clock', () => {
       player.seek({ sec: 5, nsec: 0 });
       await flushAsyncWork();
       expect(seenTimes.at(-1)).toBe(5);
+      expect(cursor.end).toHaveBeenCalledTimes(1);
+      expect(source.preparePlaybackBuffer).toHaveBeenLastCalledWith({
+        time: { sec: 5, nsec: 0 },
+        topics: [TOPIC],
+        minAheadMs: 1_000,
+      });
 
       delayedBatch.resolve([makeImageMessageAt(7)]);
       await flushAsyncWork();

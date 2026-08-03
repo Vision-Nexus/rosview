@@ -38,7 +38,10 @@ export interface RosViewerProps {
   /** Fired after this component rewrites SPA query state and the host should re-read `window.location.search`. */
   onSpaUrlQuerySync?: () => void;
   /**
-   * Remote dataset manifest: JSON URL or parsed rows.
+   * Remote dataset manifest: JSON URL or parsed rows. Parsed rows may carry an immutable `sourceId`
+   * and remote reader policy. `sourceId` deduplicates an immutable object, but does not hot-swap an
+   * active reader: changing a row URL rebuilds the affected worker-backed source. Hosts that renew
+   * without a rebuild must keep the URL stable and refresh its transport beneath RosViewer.
    * Merged/deduped with `url` / `urls`; fetch errors are logged only and do not block other sources.
    */
   fileManifest?: string | FileListItem[];

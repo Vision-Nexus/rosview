@@ -5,7 +5,12 @@ import {
   readUiPreferenceParamsFromSearch,
 } from '@/core/preferences/mergeInitialUiPreferences';
 import type { PreferencePersistence } from '@/core/preferences/types';
-import type { DatasetItem } from '@/shared/utils/datasetSources';
+import {
+  datasetItemIdentity,
+  normalizeRemoteReaderTuning,
+  type DatasetItem,
+  type FileListItem,
+} from '@/shared/utils/datasetSources';
 import { resolveBrowserHttpUrl } from '@/shared/utils/resolveBrowserHttpUrl';
 import type { SourceLocator } from '@/shared/utils/sourceLocator';
 import type { RosViewerProps } from './RosViewer.types';
@@ -16,18 +21,51 @@ import type { RosViewerProps } from './RosViewer.types';
  * references (`files`/`urls`/`fileManifest` arrays are typically recreated
  * by the caller on every render).
  */
+function fileManifestSignature(fileManifest: string | FileListItem[] | undefined): string {
+  if (fileManifest == undefined) return '';
+  if (typeof fileManifest === 'string') return fileManifest.trim();
+  return JSON.stringify(
+    fileManifest.map((row) => {
+      const sourceId = typeof row.sourceId === 'string' && row.sourceId.trim() ? row.sourceId.trim() : undefined;
+      if (sourceId == undefined) return row;
+      const remoteReader = normalizeRemoteReaderTuning(row.remoteReader);
+      return {
+        sourceId,
+        url: row.url.trim(),
+        ...(typeof row.sizeBytes === 'number' ? { sizeBytes: row.sizeBytes } : {}),
+        ...(remoteReader != undefined ? { remoteReader } : {}),
+      };
+    }),
+  );
+}
+
+/**
+ * Identifies the concrete reader configuration for an active group. A
+ * `sourceId` remains the dataset identity, but an updated URL must rebuild
+ * the worker-backed reader because it cannot be swapped in place.
+ */
+export function sourceLoadSignature(items: DatasetItem[]): string {
+  return JSON.stringify(
+    items.map((item) => {
+      if (item.kind !== 'url') return { identity: datasetItemIdentity(item) };
+      const remoteReader = normalizeRemoteReaderTuning(item.remoteReader);
+      return {
+        identity: datasetItemIdentity(item),
+        url: item.url,
+        ...(typeof item.sizeBytes === 'number' ? { sizeBytes: item.sizeBytes } : {}),
+        ...(remoteReader != undefined ? { remoteReader } : {}),
+      };
+    }),
+  );
+}
+
 export function propsSignature(props: RosViewerProps): string {
   const urlState = props.urlState ?? 'off';
   const urls = (props.urls ?? []).map((u) => u.trim()).join('\0');
   const url = props.url?.trim() ?? '';
   const files = (props.files ?? []).map((f) => `${f.name}:${f.size}:${f.lastModified}`).join('\0');
   const file = props.file ? `${props.file.name}:${props.file.size}:${props.file.lastModified}` : '';
-  const fileListSig =
-    props.fileManifest == null
-      ? ''
-      : typeof props.fileManifest === 'string'
-        ? props.fileManifest.trim()
-        : JSON.stringify(props.fileManifest);
+  const fileListSig = fileManifestSignature(props.fileManifest);
   const mergeSources = props.mergeSources ? '1' : '0';
   return `${urlState}|${urls}|${url}|${files}|${file}|${fileListSig}|${mergeSources}`;
 }

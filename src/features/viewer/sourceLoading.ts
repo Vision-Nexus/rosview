@@ -6,13 +6,14 @@
  */
 import { WorkerSerializedSource } from '@/infra/workers/WorkerSerializedSource';
 import type { CombinedSourceMember } from '@/infra/workers/CombinedSourceProxy';
+import type { RemoteSourceInitArgs } from '@/infra/workers/types';
 import {
   loadHdf5WasmBinary,
   loadSqlWasmBinary,
   loadZstdWasmBinary,
   needsZstdWasmForWorker,
 } from '@/infra/workers/preloadWorkerWasm';
-import { isRosRecordingFilename, type DatasetItem } from '@/shared/utils/datasetSources';
+import { isRosRecordingFilename, normalizeRemoteReaderTuning, type DatasetItem } from '@/shared/utils/datasetSources';
 import { resolveBrowserHttpUrl } from '@/shared/utils/resolveBrowserHttpUrl';
 
 export function extensionForDataset(ds: DatasetItem): string | undefined {
@@ -62,10 +63,12 @@ export async function buildInitArgsForDataset(
   const hdf5WasmBinary = ext === 'hdf5' || ext === 'h5' ? await loadHdf5WasmBinary() : undefined;
   const zstdWasmBinary = needsZstdWasmForWorker(ext) ? await loadZstdWasmBinary() : undefined;
   if (ds.kind === 'url' && ds.url) {
-    const init: Record<string, unknown> = {
+    const remoteReader = normalizeRemoteReaderTuning(ds.remoteReader);
+    const init: RemoteSourceInitArgs = {
       url: resolveBrowserHttpUrl(ds.url),
       workerPerf,
       autoDataQualityScan,
+      ...(remoteReader != undefined ? { remoteReader } : {}),
     };
     if (ext === 'db3') {
       init.sqlWasmBinary = sqlWasmBinary;

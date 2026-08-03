@@ -139,10 +139,6 @@ declare interface DataQualitySummaryStats {
     incidentDurationNs?: string;
 }
 
-/**
- * Unified dataset list for ROSView: local files + remote URLs.
- * Merge order: `files` → `file` → `urls` → `url` (files before URLs).
- */
 export declare type DatasetItem = {
     id: string;
     kind: 'file' | 'url';
@@ -150,10 +146,14 @@ export declare type DatasetItem = {
     name: string;
     file?: File;
     url?: string;
+    /** Immutable remote-object identity used for deduplication and session identity. It does not swap an active reader's URL in place. */
+    readonly sourceId?: string;
     /** Optional manifest metadata (remote list or host-injected). */
     sizeBytes?: number;
     durationSec?: number;
     topicCount?: number;
+    /** Optional tuning for this remote source's range reader. */
+    remoteReader?: RemoteReaderTuning;
     /** Files opened together, e.g. from a directory. Some formats need sibling files to initialize correctly. */
     siblingFiles?: File[];
     /**
@@ -222,10 +222,14 @@ export declare function exportDockviewLayout(): FoxgloveLayoutData | null;
 /** One row from host `fileManifest` or remote dataset JSON. */
 export declare type FileListItem = {
     url: string;
+    /** Immutable remote-object identity used for deduplication and session identity. It does not swap an active reader's URL in place. */
+    readonly sourceId?: string;
     name?: string;
     sizeBytes?: number;
     durationSec?: number;
     topicCount?: number;
+    /** Optional tuning for this remote source's range reader. */
+    remoteReader?: RemoteReaderTuning;
 };
 
 /** Foxglove `configById[id]` is an arbitrary JSON object. */
@@ -552,6 +556,14 @@ export declare interface PlayerState {
         buffering?: boolean;
         /** Estimated continuous local buffer ahead of the current playback time. */
         bufferedAheadMs?: number;
+        /** Decoded-message look-ahead beyond the current playhead. */
+        prefetchBufferedAheadMs?: number;
+        /** Decoded-message target look-ahead for the current playback speed. */
+        prefetchTargetAheadMs?: number;
+        /** Decoded-message refill threshold for the current playback speed. */
+        prefetchLowWaterMs?: number;
+        /** Whether a decoded-message refill is currently in flight. */
+        prefetchInFlight?: boolean;
         /** Background data quality scan report (session-only). */
         dataQualityReport?: DataQualityReport;
     };
@@ -593,6 +605,17 @@ export declare function readPreferences(): RosViewPreferencesV1 | null;
 
 /** Load the saved Foxglove layout, or `null` when absent/corrupt/legacy. */
 export declare function readSavedDockviewLayout(storageKey?: string): FoxgloveLayoutData | null;
+
+/**
+ * Unified dataset list for ROSView: local files + remote URLs.
+ * Merge order: `files` → `file` → `urls` → `url` (files before URLs).
+ */
+/** Optional per-source limits for remote range readers. Omitted fields retain the reader defaults. */
+export declare type RemoteReaderTuning = Readonly<{
+    cacheSizeInBytes?: number;
+    fetchBlockSizeInBytes?: number;
+    maxRequestSizeInBytes?: number;
+}>;
 
 export declare interface ResolvedEmbedChrome {
     showNavbar: boolean;
@@ -652,7 +675,10 @@ export declare interface RosViewerProps {
     /** Fired after this component rewrites SPA query state and the host should re-read `window.location.search`. */
     onSpaUrlQuerySync?: () => void;
     /**
-     * Remote dataset manifest: JSON URL or parsed rows.
+     * Remote dataset manifest: JSON URL or parsed rows. Parsed rows may carry an immutable `sourceId`
+     * and remote reader policy. `sourceId` deduplicates an immutable object, but does not hot-swap an
+     * active reader: changing a row URL rebuilds the affected worker-backed source. Hosts that renew
+     * without a rebuild must keep the URL stable and refresh its transport beneath RosViewer.
      * Merged/deduped with `url` / `urls`; fetch errors are logged only and do not block other sources.
      */
     fileManifest?: string | FileListItem[];

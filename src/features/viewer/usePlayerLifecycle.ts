@@ -20,7 +20,7 @@ export interface UsePlayerLifecycleArgs {
   /** Player-loading UI is suppressed once a prior attempt already reported an error. */
   lastLoadError: string | null;
   activeId: string | null;
-  /** Members of the group the load effect targets; forces a rebuild when files are added to/removed from it. */
+  /** Members of the group the load effect targets; forces a rebuild when members or reader configuration change. */
   activeGroupMembersKey: string;
   datasetsRef: React.RefObject<DatasetItem[]>;
   persistence: PreferencePersistence;
@@ -229,7 +229,7 @@ export function usePlayerLifecycle(props: RosViewerProps, args: UsePlayerLifecyc
       setPlayer(null);
     };
     // `activeGroupMembersKey` is not read directly but forces a rebuild when
-    // files are added to (or removed from) the currently active group.
+    // members or the active group's worker-reader configuration changes.
   }, [
     activeId,
     activeGroupMembersKey,

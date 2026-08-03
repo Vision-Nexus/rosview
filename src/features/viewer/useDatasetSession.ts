@@ -15,6 +15,7 @@ import {
 } from '@/shared/utils/datasetSources';
 import { resolveBrowserHttpUrl } from '@/shared/utils/resolveBrowserHttpUrl';
 import { isCustomLocalLocatorString } from '@/shared/utils/sourceLocator';
+import { sourceLoadSignature } from './rosViewerUtils';
 import type { RosViewerProps } from './RosViewer.types';
 
 export interface AppendFilesResult {
@@ -121,11 +122,11 @@ export function useDatasetSession(
     setActiveId((prev) => resolveActiveId(datasets, prev));
   }, [datasets]);
 
-  /** Members of the group the load effect targets, stable while unrelated datasets change. */
+  /** Members of the group the load effect targets; URL changes rebuild their worker-backed readers. */
   const activeGroupMembersKey = useMemo(() => {
     const resolvedGroupId = loadedGroupId ?? activeId;
     const group = groups.find((g) => g.groupId === resolvedGroupId);
-    return group ? group.members.map((m) => m.id).join('\u0000') : '';
+    return group ? sourceLoadSignature(group.members) : '';
   }, [groups, loadedGroupId, activeId]);
 
   const resolvedDatasetId = loadedGroupId ?? activeId;
