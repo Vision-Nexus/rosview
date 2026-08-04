@@ -23204,7 +23204,7 @@ async function HE(e) {
 		return new e();
 	}
 	if (e === "bag") {
-		let { default: e } = await import("./bag.worker-DZU-C7xI.js");
+		let { default: e } = await import("./bag.worker-NK21j6Ox.js");
 		return new e();
 	}
 	if (e === "db3") {
@@ -23215,7 +23215,7 @@ async function HE(e) {
 		let { default: e } = await import("./hdf5.worker-DgXzQCQm.js");
 		return new e();
 	}
-	let { default: t } = await import("./mcap.worker-2QDzA1Zs.js");
+	let { default: t } = await import("./mcap.worker-CXrdfDnq.js");
 	return new t();
 }
 async function UE(e, t, n) {
