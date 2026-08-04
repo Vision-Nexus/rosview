@@ -226,14 +226,9 @@ export default class CachedFilelike implements Readable {
     if (!missing) {
       return undefined;
     }
-    // The virtual service worker caches only exact completed ranges. Fixed 1 MiB boundaries give
-    // adjacent MCAP index and chunk reads a reusable cache key without making a reader wait for an
-    // 8 MiB response body before it receives any bytes.
-    const requestSize = Math.min(
-      CACHE_STORAGE_BLOCK_SIZE,
-      this.#fetchBlockSizeInBytes,
-      this.#maxRequestSizeInBytes,
-    );
+    // The virtual service worker caches only exact completed ranges. Align requests to the caller's
+    // configured block size so adjacent MCAP index and chunk reads share reusable cache keys.
+    const requestSize = Math.min(this.#fetchBlockSizeInBytes, this.#maxRequestSizeInBytes);
     const blockStart = Math.floor(missing.start / requestSize) * requestSize;
     const readAhead = { start: blockStart, end: Math.min(fileSize, blockStart + requestSize) };
     // A partial existing block must be completed exactly; fetching the whole aligned block would

@@ -70,6 +70,25 @@ describe('CachedFilelike range caching', () => {
     await expect(footer).resolves.toEqual(new Uint8Array([9, 10]));
   });
 
+  it('honors an explicit block size above the internal cache storage block', async () => {
+    const blockSize = 2 * 1024 * 1024;
+    const reader = new TestFileReader(3 * blockSize);
+    const filelike = new CachedFilelike({
+      fileReader: reader,
+      cacheSizeInBytes: 4 * blockSize,
+      fetchBlockSizeInBytes: blockSize,
+      maxRequestSizeInBytes: blockSize,
+    });
+
+    const read = filelike.read(blockSize + 1, 1);
+    await flushAsyncWork();
+    expect(reader.streams[0]).toMatchObject({ offset: blockSize, length: blockSize });
+    const block = new Uint8Array(blockSize);
+    block[1] = 9;
+    reader.streams[0].emit('data', block);
+    await expect(read).resolves.toEqual(new Uint8Array([9]));
+  });
+
   it('splits a chunk-sized read into bounded sequential requests', async () => {
     const reader = new TestFileReader(32);
     const filelike = new CachedFilelike({
