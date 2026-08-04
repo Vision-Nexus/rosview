@@ -828,6 +828,37 @@ declare interface StreamMessagesInTimeRangeArgs extends GetMessagesInTimeRangeAr
     batchWallTimeMs?: number;
 }
 
+/**
+ * Open a dedicated MCAP worker and yield decoded messages for `topics` in the
+ * inclusive `[start, end]` receive-time range. The worker, reader, cache, and
+ * cursor are never shared with a visible player and are terminated when this
+ * iterator finishes, is cancelled, or fails.
+ */
+export declare function streamRemoteMcapMessages<T = unknown>(options: StreamRemoteMcapMessagesOptions): AsyncIterableIterator<MessageEvent_2<T>>;
+
+/**
+ * Parameters for an independent, full-range MCAP read.
+ *
+ * `url` is the same-origin virtual MCAP URL registered with the host service
+ * worker. It must remain mapped to one immutable object while this iterator
+ * runs; do not pass a direct signed or leased storage URL.
+ * `totalBytes` is that immutable object's frozen byte size and lets the reader
+ * open it without a separate size probe.
+ */
+export declare interface StreamRemoteMcapMessagesOptions {
+    /** Service-worker virtual URL for one immutable remote MCAP object. */
+    url: string;
+    /** Frozen byte size of the immutable remote MCAP object. */
+    totalBytes: number;
+    topics: readonly string[];
+    /** Inclusive lower receive-time bound. */
+    start: Time;
+    /** Inclusive upper receive-time bound. */
+    end: Time;
+    /** Cancels the reader and terminates its dedicated worker. */
+    signal?: AbortSignal;
+}
+
 export declare interface Subscription {
     topic: string;
     subscriberId: string;

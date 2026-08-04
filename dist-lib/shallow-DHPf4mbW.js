@@ -1,5 +1,5 @@
 import e from "react";
-//#region node_modules/.pnpm/zustand@5.0.14_@types+react@19.2.17_react@19.2.8_use-sync-external-store@1.6.0_react@19.2.8_/node_modules/zustand/esm/vanilla/shallow.mjs
+//#region node_modules/zustand/esm/vanilla/shallow.mjs
 var t = (e) => Symbol.iterator in e, n = (e) => "entries" in e, r = (e, t) => {
 	let n = e instanceof Map ? e : new Map(e.entries()), r = t instanceof Map ? t : new Map(t.entries());
 	if (n.size !== r.size) return !1;
@@ -17,7 +17,7 @@ function a(e, a) {
 	return Object.is(e, a) ? !0 : typeof e != "object" || !e || typeof a != "object" || !a || Object.getPrototypeOf(e) !== Object.getPrototypeOf(a) ? !1 : t(e) && t(a) ? n(e) && n(a) ? r(e, a) : i(e, a) : r({ entries: () => Object.entries(e) }, { entries: () => Object.entries(a) });
 }
 //#endregion
-//#region node_modules/.pnpm/zustand@5.0.14_@types+react@19.2.17_react@19.2.8_use-sync-external-store@1.6.0_react@19.2.8_/node_modules/zustand/esm/react/shallow.mjs
+//#region node_modules/zustand/esm/react/shallow.mjs
 function o(t) {
 	let n = e.useRef(void 0);
 	return (e) => {

@@ -1,5 +1,5 @@
 import { createElement as e, forwardRef as t } from "react";
-//#region node_modules/.pnpm/lucide-react@0.474.0_react@19.2.8/node_modules/lucide-react/dist/esm/shared/src/utils.js
+//#region node_modules/lucide-react/dist/esm/shared/src/utils.js
 var n = (e) => e.replace(/([a-z0-9])([A-Z])/g, "$1-$2").toLowerCase(), r = (...e) => e.filter((e, t, n) => !!e && e.trim() !== "" && n.indexOf(e) === t).join(" ").trim(), i = {
 	xmlns: "http://www.w3.org/2000/svg",
 	width: 24,

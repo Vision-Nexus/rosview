@@ -1,4 +1,4 @@
-//#region node_modules/.pnpm/uplot@1.6.32/node_modules/uplot/dist/uPlot.esm.js
+//#region node_modules/uplot/dist/uPlot.esm.js
 var e = !0, t = "uplot", n = "u-hz", r = "u-vt", i = "u-title", a = "u-wrap", o = "u-under", s = "u-over", c = "u-axis", l = "u-off", u = "u-select", d = "u-cursor-x", f = "u-cursor-y", p = "u-cursor-pt", m = "u-legend", h = "u-live", g = "u-inline", _ = "u-series", v = "u-marker", y = "u-label", b = "u-value", x = "width", S = "height", C = "top", w = "bottom", T = "left", E = "right", D = "#000", ee = "#0000", te = "mousemove", ne = "mousedown", re = "mouseup", ie = "mouseenter", ae = "mouseleave", oe = "dblclick", se = "resize", O = "scroll", k = "change", ce = "dppxchange", le = "--", A = typeof window < "u", ue = A ? document : null, de = A ? window : null, j = A ? navigator : null, M, fe;
 function pe() {
 	let e = devicePixelRatio;

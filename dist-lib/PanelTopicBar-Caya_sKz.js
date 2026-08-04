@@ -1,4 +1,4 @@
-import { s as e } from "./rafScheduler-CjUs5qQm.js";
+import { s as e } from "./rafScheduler-DNtaoEPW.js";
 import "react";
 import { jsx as t } from "react/jsx-runtime";
 //#region src/features/panels/framework/PanelTopicBar.tsx

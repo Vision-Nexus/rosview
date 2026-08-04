@@ -1,10 +1,10 @@
-import { f as e, i as t, t as n } from "./rafScheduler-CjUs5qQm.js";
-import { D as r, E as i, F as a, G as o, H as s, I as c, K as l, L as u, O as d, P as f, R as p, S as m, T as h, U as g, V as _, W as v, _ as y, a as b, c as x, ct as S, d as C, et as w, f as T, g as E, i as D, j as O, l as ee, lt as k, m as te, n as ne, o as A, ot as re, p as ie, q as j, r as ae, s as oe, st as M, t as se, u as N, ut as P, w as F, x as ce, z as I } from "./usePlotTopicDetection-ChDKNofS.js";
-import { t as le } from "./TopicQuickPicker-BlpJfaiH.js";
-import { t as ue } from "./shallow-CcFmNHUZ.js";
+import { f as e, i as t, t as n } from "./rafScheduler-DNtaoEPW.js";
+import { D as r, E as i, F as a, G as o, H as s, I as c, K as l, L as u, O as d, P as f, R as p, S as m, T as h, U as g, V as _, W as v, _ as y, a as b, c as x, ct as S, d as C, et as w, f as T, g as E, i as D, j as O, l as ee, lt as k, m as te, n as ne, o as A, ot as re, p as ie, q as j, r as ae, s as oe, st as M, t as se, u as N, ut as P, w as F, x as ce, z as I } from "./usePlotTopicDetection-CPrjcvYc.js";
+import { t as le } from "./TopicQuickPicker-DOu76mVX.js";
+import { t as ue } from "./shallow-DHPf4mbW.js";
 import { i as de, o as L } from "./timeSeries-Al2bAf1m.js";
 import { n as fe } from "./time-BoEDgjoH.js";
-import { t as R } from "./uPlot.min-FdV45ote.js";
+import { t as R } from "./uPlot.min-DbnxNccy.js";
 import { useCallback as z, useEffect as B, useMemo as V, useRef as H, useState as U } from "react";
 import { Fragment as pe, jsx as W, jsxs as G } from "react/jsx-runtime";
 //#region src/features/panels/Plot/pickDefaultPlotTopic.ts
