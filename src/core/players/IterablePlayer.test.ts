@@ -464,7 +464,7 @@ describe('IterablePlayer playback clock', () => {
     }
   });
 
-  it('fills to the target, then refills only below the low-water mark', async () => {
+  it('maintains an eight-second target and refills decoded messages below four seconds', async () => {
     let now = 0;
     let nextRafId = 1;
     const oldPerformanceNow = performance.now;
@@ -486,9 +486,10 @@ describe('IterablePlayer playback clock', () => {
 
     const source = makeSource([]);
     const cursor = {
-      nextBatch: vi.fn()
-        .mockResolvedValueOnce([makeImageMessageAtMs(1100)])
-        .mockResolvedValueOnce([makeImageMessageAtMs(1900)]),
+      nextBatch: vi
+        .fn()
+        .mockResolvedValueOnce([makeImageMessageAtMs(8_100)])
+        .mockResolvedValueOnce([makeImageMessageAtMs(11_900)]),
       end: vi.fn(async () => undefined),
     };
     vi.mocked(source.getMessageCursor).mockResolvedValue(cursor as never);
@@ -509,8 +510,8 @@ describe('IterablePlayer playback clock', () => {
       now = 100;
       runNextRaf();
       await flushAsyncWork();
-      expect(cursor.nextBatch).toHaveBeenNthCalledWith(1, 1000, {
-        endTime: { sec: 1, nsec: 100_000_000 },
+      expect(cursor.nextBatch).toHaveBeenNthCalledWith(1, 8_000, {
+        endTime: { sec: 8, nsec: 100_000_000 },
         maxMessages: 512,
       });
 
@@ -519,12 +520,71 @@ describe('IterablePlayer playback clock', () => {
       await flushAsyncWork();
       expect(cursor.nextBatch).toHaveBeenCalledTimes(1);
 
-      now = 900;
+      now = 4_200;
       runNextRaf();
       await flushAsyncWork();
       expect(cursor.nextBatch).toHaveBeenCalledTimes(2);
     } finally {
       player.close();
+      Object.defineProperty(performance, 'now', {
+        configurable: true,
+        value: oldPerformanceNow,
+      });
+      globalThis.requestAnimationFrame = oldRequestAnimationFrame;
+      globalThis.cancelAnimationFrame = oldCancelAnimationFrame;
+    }
+  });
+
+  it('refreshes the byte high-water mark while a decoded playback batch remains in flight', async () => {
+    let now = 0;
+    let nextRafId = 1;
+    const oldPerformanceNow = performance.now;
+    const oldRequestAnimationFrame = globalThis.requestAnimationFrame;
+    const oldCancelAnimationFrame = globalThis.cancelAnimationFrame;
+    const rafCallbacks = new Map<number, FrameRequestCallback>();
+    Object.defineProperty(performance, 'now', {
+      configurable: true,
+      value: () => now,
+    });
+    globalThis.requestAnimationFrame = vi.fn((cb: FrameRequestCallback) => {
+      const id = nextRafId++;
+      rafCallbacks.set(id, cb);
+      return id;
+    });
+    globalThis.cancelAnimationFrame = vi.fn((id: number) => {
+      rafCallbacks.delete(id);
+    });
+
+    const delayedBatch = deferred<MessageEvent[]>();
+    const source = makeSource([]);
+    const cursor = { nextBatch: vi.fn(() => delayedBatch.promise), end: vi.fn(async () => undefined) };
+    vi.mocked(source.getMessageCursor).mockResolvedValue(cursor as never);
+    const player = new IterablePlayer(source);
+    const runNextRaf = () => {
+      const id = Math.min(...rafCallbacks.keys());
+      const callback = rafCallbacks.get(id);
+      rafCallbacks.delete(id);
+      callback?.(now);
+    };
+
+    try {
+      await player.initialize({});
+      player.registerSubscriptions('panel', [{ topic: TOPIC, subscriberId: 'panel' }]);
+      await flushAsyncWork();
+      player.play();
+
+      now = 100;
+      runNextRaf();
+      await flushAsyncWork();
+      const afterFirstTick = vi.mocked(source.preparePlaybackBuffer).mock.calls.length;
+
+      now = 400;
+      runNextRaf();
+      await flushAsyncWork();
+      expect(source.preparePlaybackBuffer).toHaveBeenCalledTimes(afterFirstTick + 1);
+    } finally {
+      player.close();
+      delayedBatch.resolve([]);
       Object.defineProperty(performance, 'now', {
         configurable: true,
         value: oldPerformanceNow,
@@ -638,14 +698,14 @@ describe('IterablePlayer playback clock', () => {
       callback?.(now);
       await flushAsyncWork();
 
-      expect(cursor.nextBatch).toHaveBeenCalledWith(10_000, {
+      expect(cursor.nextBatch).toHaveBeenCalledWith(15_000, {
         endTime: { sec: 10, nsec: 0 },
         maxMessages: 512,
       });
       expect(source.preparePlaybackBuffer).toHaveBeenLastCalledWith({
         time: { sec: 1, nsec: 0 },
         topics: [TOPIC],
-        minAheadMs: 10_000,
+        minAheadMs: 15_000,
       });
     } finally {
       player.close();
@@ -1354,7 +1414,7 @@ describe('IterablePlayer playback clock', () => {
       expect(source.preparePlaybackBuffer).toHaveBeenLastCalledWith({
         time: { sec: 5, nsec: 0 },
         topics: [TOPIC],
-        minAheadMs: 1_000,
+        minAheadMs: 8_000,
       });
 
       delayedBatch.resolve([makeImageMessageAt(7)]);

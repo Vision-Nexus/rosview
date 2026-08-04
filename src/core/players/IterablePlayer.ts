@@ -28,8 +28,10 @@ const SLOW_DISTRIBUTION_MS = 16;
 const RANGE_READ_MAX_MESSAGES = 80_000;
 const RANGE_READ_BATCH_MESSAGES = 2048;
 const RANGE_READ_BATCH_WALL_MS = 16;
-const PLAYBACK_PREFETCH_LOW_WATER_MS = 250;
-const PLAYBACK_PREFETCH_TARGET_AHEAD_MS = 1_000;
+const PLAYBACK_PREFETCH_LOW_WATER_MS = 4_000;
+const PLAYBACK_PREFETCH_TARGET_AHEAD_MS = 8_000;
+const MAX_PLAYBACK_PREFETCH_TARGET_AHEAD_MS = 15_000;
+const PLAYBACK_BUFFER_REFILL_INTERVAL_MS = 250;
 const PLAYBACK_PREFETCH_MAX_MESSAGES = 512;
 const PLAYBACK_BUFFERING_DELAY_MS = 500;
 
@@ -166,6 +168,7 @@ export class IterablePlayer implements Player {
   private _prefetchPromise?: Promise<void>;
   private _prefetchStartedAtMs: number | undefined;
   private _prefetchRequestId = 0;
+  private _lastPlaybackBufferRequestMs = Number.NEGATIVE_INFINITY;
   private _timeSubscribers = new Set<(time: Time) => void>();
   private _rafId: number | undefined;
   private _lastPipelineEmitMs = 0;
@@ -666,6 +669,7 @@ export class IterablePlayer implements Player {
     this._prefetchRequestId += 1;
     this._prefetchPromise = undefined;
     this._prefetchStartedAtMs = undefined;
+    this._lastPlaybackBufferRequestMs = Number.NEGATIVE_INFINITY;
     this._prefetchedMessages = [];
     this._emptyBatchStreak = 0;
     this._emptyBatchStartedAtMs = undefined;
@@ -1047,7 +1051,10 @@ export class IterablePlayer implements Player {
   }
 
   private _playbackPrefetchTargetAheadMs(): number {
-    return Math.round(PLAYBACK_PREFETCH_TARGET_AHEAD_MS * this._speed);
+    return Math.min(
+      MAX_PLAYBACK_PREFETCH_TARGET_AHEAD_MS,
+      Math.round(PLAYBACK_PREFETCH_TARGET_AHEAD_MS * this._speed),
+    );
   }
 
   private _playbackPrefetchLowWaterMs(targetAheadMs: number): number {
@@ -1131,6 +1138,16 @@ export class IterablePlayer implements Player {
     const lowWaterMs = this._playbackPrefetchLowWaterMs(targetAheadMs);
     const bufferedAheadMs = this._prefetchedAheadMs(playhead, topics);
     this._updatePrefetchProgress(bufferedAheadMs, targetAheadMs, lowWaterMs);
+
+    // Keep byte-range prefetch at its high-water mark independently of the decoded-message queue.
+    // The queue may hit its message cap well before an eight-second video buffer, but the worker can
+    // still keep two 8 MiB source blocks ready for the next decode window.
+    const now = performance.now();
+    if (topics.length > 0 && now - this._lastPlaybackBufferRequestMs >= PLAYBACK_BUFFER_REFILL_INTERVAL_MS) {
+      this._lastPlaybackBufferRequestMs = now;
+      this._prioritizePlaybackBuffer(epoch, playhead, topics, targetAheadMs);
+    }
+
     if (
       this._prefetchPromise ||
       this._prefetchedMessages.length >= PLAYBACK_PREFETCH_MAX_MESSAGES ||
@@ -1142,7 +1159,6 @@ export class IterablePlayer implements Player {
 
     const requestId = ++this._prefetchRequestId;
     const endTime = this._clampToRange(addMs(playhead, targetAheadMs));
-    this._prioritizePlaybackBuffer(epoch, playhead, topics, targetAheadMs);
     this._prefetchStartedAtMs = performance.now();
     const promise = this._prefetchPlaybackBatch(
       epoch,

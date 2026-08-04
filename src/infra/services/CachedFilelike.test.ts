@@ -135,7 +135,7 @@ describe('CachedFilelike range caching', () => {
     expect(filelike.getDownloadedRanges()).toEqual([{ start: 0, end: 32 }]);
   });
 
-  it('finishes an active prefetch before starting its replacement', async () => {
+  it('keeps two speculative blocks in flight and advances the queue as either completes', async () => {
     const reader = new TestFileReader();
     const filelike = new CachedFilelike({
       fileReader: reader,
@@ -144,23 +144,16 @@ describe('CachedFilelike range caching', () => {
       maxRequestSizeInBytes: 8,
     });
 
-    filelike.prefetch(0, 8, { replace: true });
+    filelike.prefetch(0, 24, { replace: true });
     await flushAsyncWork();
-    expect(reader.streams[0]).toMatchObject({ offset: 0, length: 8 });
-    reader.streams[0].emitData([4, 5, 6, 7], 4);
-
-    filelike.prefetch(16, 4, { replace: true });
-    await flushAsyncWork();
-    expect(reader.streams[0].destroyed).toBe(false);
-    expect(reader.streams).toHaveLength(1);
-
-    reader.streams[0].emitData([0, 1, 2, 3], 0);
-    await flushAsyncWork();
-    expect(reader.streams[1]).toMatchObject({ offset: 16, length: 8 });
-    expect(filelike.getDownloadedRanges()).toEqual([{ start: 0, end: 8 }]);
-
-    await expect(filelike.read(4, 4)).resolves.toEqual(new Uint8Array([4, 5, 6, 7]));
     expect(reader.streams).toHaveLength(2);
+    expect(reader.streams[0]).toMatchObject({ offset: 0, length: 8 });
+    expect(reader.streams[1]).toMatchObject({ offset: 8, length: 8 });
+
+    reader.streams[0].emitData([0, 1, 2, 3, 4, 5, 6, 7]);
+    await flushAsyncWork();
+    expect(reader.streams[1].destroyed).toBe(false);
+    expect(reader.streams[2]).toMatchObject({ offset: 16, length: 8 });
   });
 
   it('keeps an unrelated prefetch alive beside a foreground read', async () => {

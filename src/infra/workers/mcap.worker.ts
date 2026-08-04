@@ -38,12 +38,12 @@ import {
 type IndexedChunkCoverage = ChunkCoverage;
 
 const MIB = 1024 * 1024;
-const PREFETCH_CACHE_FRACTION = 0.75;
-const MIN_PREFETCH_BYTES = 64 * MIB;
+const PREFETCH_CACHE_FRACTION = 0.5;
+const MIN_PREFETCH_BYTES = 16 * MIB;
 const MAX_PREFETCH_BYTES = 768 * MIB;
 const MAX_PREFETCH_HORIZON_NS = 15_000_000_000n;
 const MAX_CONTIGUOUS_CHUNK_GAP_NS = 750_000_000n;
-const DEFAULT_PLAYBACK_BUFFER_TARGET_MS = 1_000;
+const DEFAULT_PLAYBACK_BUFFER_TARGET_MS = 8_000;
 const PLAYBACK_CURSOR_BUFFER_AHEAD_MS = 1_500;
 
 class McapWorkerImpl implements IWorkerSerializedSourceWorker {

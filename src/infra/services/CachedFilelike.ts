@@ -20,6 +20,8 @@ export interface FileReader {
 const CACHE_STORAGE_BLOCK_SIZE = 1024 * 1024;
 const DEFAULT_MAX_REQUEST_SIZE = 8 * 1024 * 1024;
 const DEFAULT_FETCH_BLOCK_SIZE = DEFAULT_MAX_REQUEST_SIZE;
+const MAX_PARALLEL_PREFETCH_CONNECTIONS = 2;
+const PREFETCH_RETRY_DELAY_MS = 500;
 
 export default class CachedFilelike implements Readable {
   #fileReader: FileReader;
@@ -33,7 +35,7 @@ export default class CachedFilelike implements Readable {
   #keepReconnectingCallback?: (reconnecting: boolean) => void;
 
   #currentReadConnection: { stream: FileStream; range: Range; nextOffset: number } | undefined;
-  #currentPrefetchConnection: { stream: FileStream; range: Range; nextOffset: number } | undefined;
+  #currentPrefetchConnections: { stream: FileStream; range: Range; nextOffset: number }[] = [];
 
   #readRequests: {
     range: Range;
@@ -44,6 +46,7 @@ export default class CachedFilelike implements Readable {
   #prefetchRequests: Range[] = [];
 
   #lastErrorTime?: number;
+  #nextPrefetchAttemptAtMs = 0;
 
   public constructor(options: {
     fileReader: FileReader;
@@ -202,17 +205,17 @@ export default class CachedFilelike implements Readable {
       }
     }
 
-    // Keep one speculative block alive beside a foreground read. The ranges are disjoint because
-    // #getNextFetchRange treats both active ranges as covered. That avoids aborting a useful CDN
-    // transfer whenever an MCAP index read arrives.
-    if (!this.#currentPrefetchConnection) {
+    // A smooth remote stream keeps two disjoint speculative blocks moving behind the playhead.
+    // Active prefetches count as covered, so foreground reads cannot duplicate or abort either one.
+    while (
+      this.#currentPrefetchConnections.length < MAX_PARALLEL_PREFETCH_CONNECTIONS &&
+      Date.now() >= this.#nextPrefetchAttemptAtMs
+    ) {
       const prefetchRange = this.#prefetchRequests[0];
-      if (prefetchRange) {
-        const prefetchFetchRange = this.#getNextFetchRange(prefetchRange, size);
-        if (prefetchFetchRange) {
-          this.#setConnection(prefetchFetchRange, "prefetch");
-        }
-      }
+      if (!prefetchRange) break;
+      const prefetchFetchRange = this.#getNextFetchRange(prefetchRange, size);
+      if (!prefetchFetchRange) break;
+      this.#setConnection(prefetchFetchRange, "prefetch");
     }
   }
 
@@ -230,18 +233,19 @@ export default class CachedFilelike implements Readable {
     // configured block size so adjacent MCAP index and chunk reads share reusable cache keys.
     const requestSize = Math.min(this.#fetchBlockSizeInBytes, this.#maxRequestSizeInBytes);
     const blockStart = Math.floor(missing.start / requestSize) * requestSize;
-    const readAhead = { start: blockStart, end: Math.min(fileSize, blockStart + requestSize) };
+    const blockEnd = Math.min(fileSize, blockStart + requestSize);
+    const readAhead = { start: blockStart, end: blockEnd };
     // A partial existing block must be completed exactly; fetching the whole aligned block would
-    // duplicate retained bytes and defeat the cache's range identity.
+    // duplicate retained bytes and defeat the cache's range identity. Keep that completion bounded
+    // to its one configured block rather than letting a large queued plan bypass the transport cap.
     return coveredOrInFlight.some((range) => this.#rangeOverlaps(range, readAhead))
-      ? missing
+      ? { start: missing.start, end: Math.min(missing.end, blockEnd) }
       : readAhead;
   }
-
   #coveredOrInFlightRanges(): Range[] {
     const ranges = this.#virtualBuffer.getRangesWithData().map((range) => ({ ...range }));
     if (this.#currentReadConnection) ranges.push({ ...this.#currentReadConnection.range });
-    if (this.#currentPrefetchConnection) ranges.push({ ...this.#currentPrefetchConnection.range });
+    ranges.push(...this.#currentPrefetchConnections.map((connection) => ({ ...connection.range })));
     return this.#mergeRanges(ranges);
   }
 
@@ -266,25 +270,31 @@ export default class CachedFilelike implements Readable {
   }
 
   #setConnection(range: Range, kind: "read" | "prefetch"): void {
-    const currentConnection =
-      kind === "read" ? this.#currentReadConnection : this.#currentPrefetchConnection;
-    if (currentConnection) return;
+    if (
+      (kind === "read" && this.#currentReadConnection) ||
+      (kind === "prefetch" && this.#currentPrefetchConnections.length >= MAX_PARALLEL_PREFETCH_CONNECTIONS)
+    ) {
+      return;
+    }
 
     const stream = this.#fileReader.fetch(range.start, range.end - range.start);
     const connection = { stream, range, nextOffset: range.start };
     if (kind === "read") this.#currentReadConnection = connection;
-    else this.#currentPrefetchConnection = connection;
+    else this.#currentPrefetchConnections.push(connection);
 
     stream.on("error", (error: Error) => {
-      const activeConnection =
-        kind === "read" ? this.#currentReadConnection : this.#currentPrefetchConnection;
-      if (!activeConnection || activeConnection.stream !== stream) return;
+      const active =
+        kind === "read"
+          ? this.#currentReadConnection === connection
+          : this.#currentPrefetchConnections.includes(connection);
+      if (!active) return;
       console.error(`Connection error @ ${range.start}-${range.end}:`, error);
       if (kind === "read") this.#currentReadConnection = undefined;
-      else this.#currentPrefetchConnection = undefined;
+      else this.#currentPrefetchConnections = this.#currentPrefetchConnections.filter((item) => item !== connection);
       if (kind === "prefetch") {
+        this.#nextPrefetchAttemptAtMs = Date.now() + PREFETCH_RETRY_DELAY_MS;
         this.#prefetchRequests = this.#prefetchRequests.filter(
-          (queued) => queued.start !== range.start || queued.end !== range.end,
+          (queued) => !this.#rangeOverlaps(queued, range),
         );
         this.#updateState();
         return;
@@ -312,8 +322,10 @@ export default class CachedFilelike implements Readable {
 
     stream.on("data", (chunk: Uint8Array, chunkOffset?: number) => {
       const activeConnection =
-        kind === "read" ? this.#currentReadConnection : this.#currentPrefetchConnection;
-      if (!activeConnection || activeConnection.stream !== stream) return;
+        kind === "read"
+          ? this.#currentReadConnection === connection
+          : this.#currentPrefetchConnections.includes(connection);
+      if (!activeConnection) return;
 
       if (kind === "read" && this.#lastErrorTime != undefined) {
         this.#lastErrorTime = undefined;
@@ -322,14 +334,17 @@ export default class CachedFilelike implements Readable {
         }
       }
 
-      const offset = chunkOffset ?? activeConnection.nextOffset;
-      activeConnection.nextOffset = Math.max(activeConnection.nextOffset, offset + chunk.byteLength);
+      const offset = chunkOffset ?? connection.nextOffset;
+      connection.nextOffset = Math.max(connection.nextOffset, offset + chunk.byteLength);
       this.#virtualBuffer.copyFrom(chunk, offset);
 
       if (this.#virtualBuffer.hasData(range.start, range.end)) {
         stream.destroy();
         if (kind === "read") this.#currentReadConnection = undefined;
-        else this.#currentPrefetchConnection = undefined;
+        else {
+          this.#currentPrefetchConnections = this.#currentPrefetchConnections.filter((item) => item !== connection);
+          this.#nextPrefetchAttemptAtMs = 0;
+        }
       }
 
       this.#updateState();
