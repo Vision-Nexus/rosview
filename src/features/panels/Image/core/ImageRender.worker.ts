@@ -4,32 +4,34 @@ import type { Time } from '@/core/types/ros';
 import { decodeCompressedDepth } from './compressedDepthDecoder';
 import { decodeRawImage } from './rawDecoders';
 import {
-  containsH264IdrNal,
-  getH264ChunkType,
-  getH264CodecCandidates,
-  monotonicH264TimestampUs,
-  parseH264SpsCodec,
-  scanH264NalTypes,
-} from './h264';
+  type VideoCodec,
+  containsVideoRandomAccessNal,
+  containsVideoVclNal,
+  isVideoConfigOnly,
+  monotonicVideoTimestampUs,
+  streamCodecIdentity,
+  videoChunkType,
+  videoCodecCandidates,
+  videoCodecFromFormat,
+} from './videoCodec';
 import {
-  H264_DECODE_QUEUE_HIGH_WATER,
-  H264_PRESSURED_RENDER_INTERVAL_MS,
-  H264_RENDER_INTERVAL_MS,
+  VIDEO_DECODE_QUEUE_HIGH_WATER,
+  VIDEO_PRESSURED_RENDER_INTERVAL_MS,
+  VIDEO_RENDER_INTERVAL_MS,
   decodedFrameLatenessMs,
-  initialH264PressureState,
-  isH264HardLimitExceeded,
+  initialVideoPressureState,
+  isVideoHardLimitExceeded,
   isRetrogradeMediaFrame,
-  shouldDropDecodedH264Frame,
+  shouldDropDecodedVideoFrame,
   updateDecodeDurationEwma,
-  updateH264Pressure,
-  type H264PressureState,
-} from './h264Backpressure';
+  updateVideoPressure,
+  type VideoPressureState,
+} from './videoBackpressure';
 import {
-  applyH264HardLimit,
-  isH264ConfigOnly,
-  selectLatestCompleteH264Gop,
-  updateH264ConfigPackets,
-} from './h264Queue';
+  applyVideoHardLimit,
+  selectLatestCompleteVideoGop,
+  updateVideoConfigPackets,
+} from './videoQueue';
 import { withTimeout } from './asyncTimeout';
 import {
   getCompressedKind,
@@ -52,7 +54,7 @@ import type {
   ImageWorkerFrameEnvelope,
 } from './imageWorkerProtocol';
 import type { RawImageDecodeOptions } from './imageColorMode';
-import { H264_SEEK_MAX_FRAMES } from './h264SeekRepair';
+import { VIDEO_SEEK_MAX_FRAMES } from './videoSeekRepair';
 
 const DEFAULT_RENDER_OPTIONS: ImageRenderOptions = {
   backgroundColor: '#000000',
@@ -87,15 +89,16 @@ const DEFAULT_VIEWPORT: ImageViewport = {
 
 const OUTPUT_TIMEOUT_MS = 5000;
 const METRICS_INTERVAL_MS = 1000;
-const H264_RESYNC_COOLDOWN_MS = 200;
+const VIDEO_RESYNC_COOLDOWN_MS = 200;
 
-// ---------- H.264 decoder ----------
+// ---------- H.264 / H.265 decoder ----------
 
-class WorkerH264Decoder {
+class WorkerVideoDecoder {
   #decoder: VideoDecoder | null = null;
   #lastTimestampUs = -1;
   #configuredCodec: string | null = null;
   #streamCodec: string | null = null;
+  #codecKind: VideoCodec | null = null;
   #generation = 0;
   #submitted = new Map<number, {
     frame: ImageWorkerFrameEnvelope;
@@ -112,17 +115,15 @@ class WorkerH264Decoder {
     dequeue: () => void;
   };
 
-  public constructor(
-    callbacks: {
-      output: (output: {
-        videoFrame: VideoFrame;
-        sourceFrame: ImageWorkerFrameEnvelope;
-        decodeMs: number;
-      }) => void;
-      error: (error: Error) => void;
-      dequeue: () => void;
-    },
-  ) {
+  public constructor(callbacks: {
+    output: (output: {
+      videoFrame: VideoFrame;
+      sourceFrame: ImageWorkerFrameEnvelope;
+      decodeMs: number;
+    }) => void;
+    error: (error: Error) => void;
+    dequeue: () => void;
+  }) {
     this.#callbacks = callbacks;
   }
 
@@ -133,12 +134,11 @@ class WorkerH264Decoder {
 
   public reset(): void {
     this.#generation += 1;
-    if (this.#decoder && this.#decoder.state !== 'closed') {
-      this.#decoder.close();
-    }
+    if (this.#decoder && this.#decoder.state !== 'closed') this.#decoder.close();
     this.#decoder = null;
     this.#configuredCodec = null;
     this.#streamCodec = null;
+    this.#codecKind = null;
     this.#submitted.clear();
   }
 
@@ -155,19 +155,25 @@ class WorkerH264Decoder {
     data: Uint8Array<ArrayBuffer>,
     sortTimeKey: bigint,
   ): Promise<void> {
-    if (typeof VideoDecoder === 'undefined') {
-      throw new Error('WebCodecs VideoDecoder is not supported');
-    }
+    if (typeof VideoDecoder === 'undefined') throw new Error('WebCodecs VideoDecoder is not supported');
+    const codec = frame.kind === 'compressed' ? videoCodecFromFormat(frame.format) : null;
+    if (!codec) throw new Error('Compressed frame does not declare H.264 or H.265');
 
-    const generation = this.#generation;
-    await this.#ensureDecoder(data);
-    if (generation !== this.#generation) {
-      return;
+    const parsedCodec = streamCodecIdentity(codec, data);
+    if (
+      this.#decoder &&
+      this.#decoder.state !== 'closed' &&
+      ((this.#codecKind !== null && codec !== this.#codecKind) ||
+        (parsedCodec && parsedCodec !== this.#streamCodec))
+    ) {
+      this.reset();
     }
+    const generation = this.#generation;
+    if (!(await this.#ensureDecoder(codec, data, parsedCodec, generation))) return;
     const decoder = this.#decoder!;
-    const timestamp = this.#monotonicTimestampUs(sortTimeKey);
-    const hasVcl = scanH264NalTypes(data).some((nalType) => nalType === 1 || nalType === 5);
-    if (hasVcl) {
+    const timestamp = monotonicVideoTimestampUs(sortTimeKey, this.#lastTimestampUs);
+    this.#lastTimestampUs = timestamp;
+    if (containsVideoVclNal(codec, data)) {
       this.#submitted.set(timestamp, {
         frame,
         startedAt: performance.now(),
@@ -175,57 +181,48 @@ class WorkerH264Decoder {
       });
     }
     try {
-      decoder.decode(
-        new EncodedVideoChunk({
-          type: getH264ChunkType(data),
-          timestamp,
-          data,
-        }),
-      );
+      decoder.decode(new EncodedVideoChunk({
+        type: videoChunkType(codec, data),
+        timestamp,
+        data,
+      }));
     } catch (error) {
       this.#submitted.delete(timestamp);
       throw error;
     }
   }
 
-  async #ensureDecoder(data: Uint8Array<ArrayBuffer>): Promise<void> {
-    const parsedCodec = parseH264SpsCodec(data);
-    if (
-      parsedCodec &&
-      parsedCodec !== this.#streamCodec &&
-      this.#decoder &&
-      this.#decoder.state !== 'closed'
-    ) {
-      this.reset();
-    }
-    if (this.#decoder && this.#decoder.state !== 'closed') {
-      return;
-    }
+  async #ensureDecoder(
+    codec: VideoCodec,
+    data: Uint8Array<ArrayBuffer>,
+    parsedCodec: string | null,
+    generation: number,
+  ): Promise<boolean> {
+    if (this.#decoder && this.#decoder.state !== 'closed') return true;
 
     let supportedConfig: VideoDecoderConfig | null = null;
-    for (const codec of getH264CodecCandidates(data)) {
+    for (const codecString of videoCodecCandidates(codec, data)) {
       const candidates: VideoDecoderConfig[] = [
-        { codec, hardwareAcceleration: 'prefer-hardware', optimizeForLatency: true },
-        { codec, hardwareAcceleration: 'no-preference', optimizeForLatency: true },
+        { codec: codecString, hardwareAcceleration: 'prefer-hardware', optimizeForLatency: true },
+        { codec: codecString, hardwareAcceleration: 'no-preference', optimizeForLatency: true },
       ];
       for (const candidate of candidates) {
         try {
           const support = await VideoDecoder.isConfigSupported(candidate);
+          if (generation !== this.#generation) return false;
           if (support.supported) {
             supportedConfig = support.config ?? candidate;
             break;
           }
         } catch {
-          // Some implementations throw for an unsupported acceleration mode.
+          // Some implementations throw for an unsupported codec or acceleration mode.
         }
       }
-      if (supportedConfig) {
-        break;
-      }
+      if (supportedConfig) break;
     }
     if (!supportedConfig) {
-      const parsed = parseH264SpsCodec(data);
-      throw new Error(`H.264 codec ${parsed ?? 'fallback candidates'} is not supported`);
+      const label = codec === 'h264' ? 'H.264' : 'H.265';
+      throw new Error(`${label} codec ${parsedCodec ?? 'fallback candidates'} is not supported`);
     }
 
     this.#decoder = new VideoDecoder({
@@ -242,27 +239,22 @@ class WorkerH264Decoder {
           decodeMs: performance.now() - submitted.startedAt,
         });
       },
-      error: (error) => {
-        this.#callbacks.error(new Error(String(error)));
-      },
+      error: (error) => this.#callbacks.error(new Error(String(error))),
     });
     this.#decoder.addEventListener('dequeue', this.#callbacks.dequeue);
     try {
       this.#decoder.configure(supportedConfig);
       this.#configuredCodec = supportedConfig.codec;
       this.#streamCodec = parsedCodec;
+      this.#codecKind = codec;
     } catch (error) {
       this.#decoder.close();
       this.#decoder = null;
       this.#configuredCodec = null;
+      this.#codecKind = null;
       throw error;
     }
-  }
-
-  #monotonicTimestampUs(timeKey: bigint): number {
-    const timestamp = monotonicH264TimestampUs(timeKey, this.#lastTimestampUs);
-    this.#lastTimestampUs = timestamp;
-    return timestamp;
+    return true;
   }
 }
 
@@ -309,14 +301,14 @@ class ImageRenderWorkerRuntime {
   #rawDecodeOptions: Partial<RawImageDecodeOptions> = {};
   #overlays: ImageAnnotationsFrame[] = [];
   #pendingFrame: ImageWorkerFrameEnvelope | null = null;
-  #pendingH264Frames: ImageWorkerFrameEnvelope[] = [];
+  #pendingVideoFrames: ImageWorkerFrameEnvelope[] = [];
   #isProcessing = false;
-  #decoder: WorkerH264Decoder;
-  #pendingDecodedH264: {
+  #decoder: WorkerVideoDecoder;
+  #pendingDecodedVideo: {
     videoFrame: VideoFrame;
     sourceFrame: ImageWorkerFrameEnvelope;
   } | null = null;
-  #h264RenderTimer: ReturnType<typeof setTimeout> | null = null;
+  #videoRenderTimer: number | null = null;
   #lastPostedUiPhase: ImageSurfaceStatus['phase'] = 'idle';
   #haltUntilReset = false;
   /** Reused RGBA buffer for raw frames; resized as needed. */
@@ -326,20 +318,21 @@ class ImageRenderWorkerRuntime {
   #imageDecoderMimeSupported = new Map<string, boolean>();
   /** The last decoded frame retained for instant-redraw on option changes. */
   #cachedFrame: CachedFrame | null = null;
-  #h264Pressure: H264PressureState = initialH264PressureState();
-  #h264DecodeMs = 0;
-  #h264WaitingForIdr = false;
-  #h264ConfigBeforeIdr: ImageWorkerFrameEnvelope[] = [];
-  #h264RecentConfig: ImageWorkerFrameEnvelope[] = [];
-  #h264NeedsResync = false;
-  #lastH264RenderAt = -Infinity;
-  #lastH264BitmapAt = -Infinity;
-  #droppedH264Frames = 0;
-  #renderedH264Frames = 0;
-  #h264ResyncCount = 0;
-  #lastH264ResyncAt = -Infinity;
+  #activeVideoCodec: VideoCodec | null = null;
+  #videoPressure: VideoPressureState = initialVideoPressureState();
+  #videoDecodeMs = 0;
+  #videoWaitingForRandomAccess = false;
+  #videoConfigBeforeRandomAccess: ImageWorkerFrameEnvelope[] = [];
+  #videoRecentConfig: ImageWorkerFrameEnvelope[] = [];
+  #videoNeedsResync = false;
+  #lastVideoRenderAt = -Infinity;
+  #lastVideoBitmapAt = -Infinity;
+  #droppedVideoFrames = 0;
+  #renderedVideoFrames = 0;
+  #videoResyncCount = 0;
+  #lastVideoResyncAt = -Infinity;
   #playbackTimeNs: bigint | null = null;
-  #lastDecodedH264TimeNs: bigint | null = null;
+  #lastDecodedVideoTimeNs: bigint | null = null;
   #lastDrawnMediaTimeNs: bigint | null = null;
   #isPlaying = false;
   #lastMetricsAt = -Infinity;
@@ -349,11 +342,11 @@ class ImageRenderWorkerRuntime {
     if (!this.#bufferCtx) {
       throw new Error('Buffer canvas context is unavailable in worker');
     }
-    this.#decoder = new WorkerH264Decoder({
-      output: (output) => this.#handleH264Output(output),
-      error: (error) => this.#handleH264DecoderError(error),
+    this.#decoder = new WorkerVideoDecoder({
+      output: (output) => this.#handleVideoOutput(output),
+      error: (error) => this.#handleVideoDecoderError(error),
       dequeue: () => {
-        this.#updateH264Pressure();
+        this.#updateVideoPressure();
         void this.#drainLatestFrame();
       },
     });
@@ -395,8 +388,8 @@ class ImageRenderWorkerRuntime {
       case 'playback':
         this.#playbackTimeNs = timeToKey(message.currentTime);
         this.#isPlaying = message.isPlaying;
-        this.#updateH264Pressure();
-        this.#trimPendingH264FramesIfNeeded();
+        this.#updateVideoPressure();
+        this.#trimPendingVideoFramesIfNeeded();
         this.#emitMetricsIfDue();
         return;
 
@@ -424,17 +417,17 @@ class ImageRenderWorkerRuntime {
         this.#redrawCachedFrameForOverlay();
         return;
 
-      case 'bootstrapH264':
-        this.#bootstrapH264(message.frames, message.preserveFrame === true);
+      case 'bootstrapVideo':
+        this.#bootstrapVideo(message.codec, message.frames, message.preserveFrame === true);
         return;
 
       case 'reset':
         this.#epoch += 1;
         this.#pendingFrame = null;
-        this.#pendingH264Frames = [];
-        this.#disposePendingH264Output();
+        this.#pendingVideoFrames = [];
+        this.#disposePendingVideoOutput();
         this.#haltUntilReset = false;
-        this.#resetH264RuntimeState();
+        this.#resetVideoRuntimeState();
         this.#decoder.reset();
         this.#disposeAuxiliaryDecodeState();
         this.#overlays = [];
@@ -449,8 +442,8 @@ class ImageRenderWorkerRuntime {
       case 'dispose':
         this.#epoch += 1;
         this.#pendingFrame = null;
-        this.#pendingH264Frames = [];
-        this.#disposePendingH264Output();
+        this.#pendingVideoFrames = [];
+        this.#disposePendingVideoOutput();
         this.#haltUntilReset = false;
         this.#decoder.dispose();
         this.#disposeAuxiliaryDecodeState();
@@ -461,13 +454,18 @@ class ImageRenderWorkerRuntime {
     }
   }
 
-  #bootstrapH264(frames: ImageWorkerFrameEnvelope[], preserveFrame: boolean): void {
+  #bootstrapVideo(
+    codec: VideoCodec,
+    frames: ImageWorkerFrameEnvelope[],
+    preserveFrame: boolean,
+  ): void {
     this.#epoch += 1;
     this.#pendingFrame = null;
-    this.#pendingH264Frames = [];
-    this.#disposePendingH264Output();
+    this.#pendingVideoFrames = [];
+    this.#disposePendingVideoOutput();
     this.#haltUntilReset = false;
-    this.#resetH264RuntimeState();
+    this.#activeVideoCodec = codec;
+    this.#resetVideoRuntimeState();
     this.#decoder.reset();
     if (!preserveFrame) {
       this.#disposeCachedBitmap();
@@ -476,98 +474,115 @@ class ImageRenderWorkerRuntime {
       this.#emitStatus({ phase: 'idle' });
     }
 
-    const h264Frames = frames.filter(isH264Frame).slice(0, H264_SEEK_MAX_FRAMES);
-    if (h264Frames.length === 0 || !h264Frames.some((frame) => containsH264IdrNal(frame.data))) {
-      this.#h264WaitingForIdr = true;
+    const videoFrames = frames
+      .filter((frame) => videoCodecForFrame(frame) === codec)
+      .slice(0, VIDEO_SEEK_MAX_FRAMES);
+    if (
+      videoFrames.length === 0 ||
+      !videoFrames.some((frame) => containsVideoRandomAccessNal(codec, frame.data))
+    ) {
+      this.#videoWaitingForRandomAccess = true;
       this.#emitMetricsIfDue(true);
       return;
     }
 
-    for (const frame of h264Frames) {
-      this.#enqueueH264Frame(frame, { applyBackpressure: false });
+    for (const frame of videoFrames) {
+      this.#enqueueVideoFrame(frame, { applyBackpressure: false });
     }
 
     this.#emitMetricsIfDue(true);
-    if (!this.#isProcessing) {
-      void this.#drainLatestFrame();
-    }
+    if (!this.#isProcessing) void this.#drainLatestFrame();
   }
 
-  #enqueueH264Frame(
+  #enqueueVideoFrame(
     frame: ImageWorkerFrameEnvelope,
     options: { applyBackpressure?: boolean } = {},
   ): void {
-    this.#h264RecentConfig = updateH264ConfigPackets(this.#h264RecentConfig, frame);
-    if (this.#h264WaitingForIdr && !containsH264IdrNal(frame.data)) {
-      if (isH264ConfigOnly(frame.data)) {
-        this.#h264ConfigBeforeIdr = updateH264ConfigPackets(
-          this.#h264ConfigBeforeIdr,
+    const codec = videoCodecForFrame(frame);
+    if (!codec) return;
+    if (this.#activeVideoCodec !== codec) {
+      this.#activeVideoCodec = codec;
+      this.#pendingVideoFrames = [];
+      this.#videoRecentConfig = [];
+      this.#videoConfigBeforeRandomAccess = [];
+      this.#videoWaitingForRandomAccess = true;
+      this.#resyncVideoDecoder();
+    }
+    this.#videoRecentConfig = updateVideoConfigPackets(
+      codec,
+      this.#videoRecentConfig,
+      frame,
+    );
+    if (this.#videoWaitingForRandomAccess && !containsVideoRandomAccessNal(codec, frame.data)) {
+      if (isVideoConfigOnly(codec, frame.data)) {
+        this.#videoConfigBeforeRandomAccess = updateVideoConfigPackets(
+          codec,
+          this.#videoConfigBeforeRandomAccess,
           frame,
         );
         return;
       }
-      this.#droppedH264Frames += 1;
-      if (options.applyBackpressure !== false) {
-        this.#emitMetricsIfDue();
-      }
+      this.#droppedVideoFrames += 1;
+      if (options.applyBackpressure !== false) this.#emitMetricsIfDue();
       return;
     }
-    if (containsH264IdrNal(frame.data)) {
-      this.#h264WaitingForIdr = false;
-      if (this.#h264ConfigBeforeIdr.length > 0) {
-        this.#pendingH264Frames.push(...this.#h264ConfigBeforeIdr);
-        this.#h264ConfigBeforeIdr = [];
+    if (containsVideoRandomAccessNal(codec, frame.data)) {
+      this.#videoWaitingForRandomAccess = false;
+      if (this.#videoConfigBeforeRandomAccess.length > 0) {
+        this.#pendingVideoFrames.push(...this.#videoConfigBeforeRandomAccess);
+        this.#videoConfigBeforeRandomAccess = [];
       }
     }
-    this.#pendingH264Frames.push(frame);
+    this.#pendingVideoFrames.push(frame);
     if (options.applyBackpressure !== false) {
-      this.#updateH264Pressure();
-      this.#trimPendingH264FramesIfNeeded();
+      this.#updateVideoPressure();
+      this.#trimPendingVideoFramesIfNeeded();
       this.#emitMetricsIfDue();
     }
   }
 
   #enqueueFrame(frame: ImageWorkerFrameEnvelope): void {
-    if (!isH264Frame(frame)) {
+    if (!isVideoFrame(frame)) {
       this.#pendingFrame = frame;
       return;
     }
-    this.#enqueueH264Frame(frame);
+    this.#enqueueVideoFrame(frame);
   }
 
-  #trimPendingH264FramesIfNeeded(): void {
-    const queueSpanMs = h264QueueSpanMs(this.#pendingH264Frames);
-    const hardLimitExceeded = isH264HardLimitExceeded(
-      this.#pendingH264Frames.length,
+  #trimPendingVideoFramesIfNeeded(): void {
+    const queueSpanMs = videoQueueSpanMs(this.#pendingVideoFrames);
+    const hardLimitExceeded = isVideoHardLimitExceeded(
+      this.#pendingVideoFrames.length,
       queueSpanMs,
     );
     const pressureTrim =
-      this.#h264Pressure.mode === 'degraded' &&
-      (this.#pendingH264Frames.length > 36 || queueSpanMs > 250);
-    if (!hardLimitExceeded && !pressureTrim) {
-      return;
-    }
+      this.#videoPressure.mode === 'degraded' &&
+      (this.#pendingVideoFrames.length > 36 || queueSpanMs > 250);
+    if (!hardLimitExceeded && !pressureTrim) return;
+    const codec = this.#activeVideoCodec;
+    if (!codec) return;
 
-    const selection = selectLatestCompleteH264Gop(
-      this.#pendingH264Frames,
-      this.#h264RecentConfig,
+    const selection = selectLatestCompleteVideoGop(
+      codec,
+      this.#pendingVideoFrames,
+      this.#videoRecentConfig,
     );
     const resyncAllowed =
       hardLimitExceeded ||
-      performance.now() - this.#lastH264ResyncAt >= H264_RESYNC_COOLDOWN_MS;
+      performance.now() - this.#lastVideoResyncAt >= VIDEO_RESYNC_COOLDOWN_MS;
     if (selection.resync && resyncAllowed) {
-      this.#pendingH264Frames = selection.frames;
-      this.#resyncH264Decoder();
-      this.#droppedH264Frames += selection.droppedFrames;
+      this.#pendingVideoFrames = selection.frames;
+      this.#resyncVideoDecoder();
+      this.#droppedVideoFrames += selection.droppedFrames;
     }
 
     if (
-      isH264HardLimitExceeded(
-        this.#pendingH264Frames.length,
-        h264QueueSpanMs(this.#pendingH264Frames),
+      isVideoHardLimitExceeded(
+        this.#pendingVideoFrames.length,
+        videoQueueSpanMs(this.#pendingVideoFrames),
       )
     ) {
-      this.#waitForNextH264Idr();
+      this.#waitForNextRandomAccess();
       return;
     }
 
@@ -579,21 +594,21 @@ class ImageRenderWorkerRuntime {
     }
   }
 
-  #waitForNextH264Idr(): void {
-    const plan = applyH264HardLimit(this.#pendingH264Frames, true);
-    this.#droppedH264Frames += plan.droppedFrames;
-    this.#pendingH264Frames = plan.frames;
-    this.#h264WaitingForIdr = true;
-    this.#h264ConfigBeforeIdr = [...this.#h264RecentConfig];
-    this.#resyncH264Decoder();
-    this.#updateH264Pressure();
+  #waitForNextRandomAccess(): void {
+    const plan = applyVideoHardLimit(this.#pendingVideoFrames, true);
+    this.#droppedVideoFrames += plan.droppedFrames;
+    this.#pendingVideoFrames = plan.frames;
+    this.#videoWaitingForRandomAccess = true;
+    this.#videoConfigBeforeRandomAccess = [...this.#videoRecentConfig];
+    this.#resyncVideoDecoder();
+    this.#updateVideoPressure();
     this.#emitMetricsIfDue(true);
   }
 
   #takeNextFrame(): ImageWorkerFrameEnvelope | null {
-    const h264Frame = this.#pendingH264Frames.shift();
-    if (h264Frame) {
-      return h264Frame;
+    const videoFrame = this.#pendingVideoFrames.shift();
+    if (videoFrame) {
+      return videoFrame;
     }
     const frame = this.#pendingFrame;
     this.#pendingFrame = null;
@@ -610,8 +625,8 @@ class ImageRenderWorkerRuntime {
       let frame: ImageWorkerFrameEnvelope | null;
       while (true) {
         if (
-          this.#pendingH264Frames.length > 0 &&
-          this.#decoder.decodeQueueSize >= H264_DECODE_QUEUE_HIGH_WATER
+          this.#pendingVideoFrames.length > 0 &&
+          this.#decoder.decodeQueueSize >= VIDEO_DECODE_QUEUE_HIGH_WATER
         ) {
           break;
         }
@@ -622,14 +637,14 @@ class ImageRenderWorkerRuntime {
         if (epoch !== this.#epoch) {
           break;
         }
-        if (isH264Frame(frame) && this.#h264NeedsResync) {
-          this.#resyncH264Decoder();
-          this.#h264NeedsResync = false;
+        if (isVideoFrame(frame) && this.#videoNeedsResync) {
+          this.#resyncVideoDecoder();
+          this.#videoNeedsResync = false;
         }
         await this.#decodeAndRender(frame, epoch);
         if (this.#haltUntilReset) {
           this.#pendingFrame = null;
-          this.#pendingH264Frames = [];
+          this.#pendingVideoFrames = [];
           break;
         }
       }
@@ -637,8 +652,8 @@ class ImageRenderWorkerRuntime {
       this.#isProcessing = false;
       if (
         this.#pendingFrame ||
-        (this.#pendingH264Frames.length > 0 &&
-          this.#decoder.decodeQueueSize < H264_DECODE_QUEUE_HIGH_WATER)
+        (this.#pendingVideoFrames.length > 0 &&
+          this.#decoder.decodeQueueSize < VIDEO_DECODE_QUEUE_HIGH_WATER)
       ) {
         void this.#drainLatestFrame();
       }
@@ -676,12 +691,10 @@ class ImageRenderWorkerRuntime {
         const kind = getCompressedKind(frame.format);
         const sortKey = timeToKey(frame.receiveTime);
 
-        if (kind === 'h264') {
+        if (kind === 'h264' || kind === 'h265') {
           await this.#decoder.submitFrame(frame, bytes, sortKey);
-          if (epoch !== this.#epoch) {
-            return;
-          }
-          this.#updateH264Pressure();
+          if (epoch !== this.#epoch) return;
+          this.#updateVideoPressure();
           this.#emitMetricsIfDue();
           return;
         }
@@ -750,9 +763,9 @@ class ImageRenderWorkerRuntime {
       if (epoch !== this.#epoch) {
         return;
       }
-      if (isH264Frame(frame)) {
-        this.#droppedH264Frames += 1;
-        this.#handleH264DecoderError(
+      if (isVideoFrame(frame)) {
+        this.#droppedVideoFrames += 1;
+        this.#handleVideoDecoderError(
           error instanceof Error ? error : new Error(String(error)),
         );
         return;
@@ -765,64 +778,64 @@ class ImageRenderWorkerRuntime {
     }
   }
 
-  #handleH264Output(output: {
+  #handleVideoOutput(output: {
     videoFrame: VideoFrame;
     sourceFrame: ImageWorkerFrameEnvelope;
     decodeMs: number;
   }): void {
     const frameTimeNs = timeToKey(output.sourceFrame.receiveTime);
-    this.#lastDecodedH264TimeNs = frameTimeNs;
-    this.#h264DecodeMs = updateDecodeDurationEwma(this.#h264DecodeMs, output.decodeMs);
+    this.#lastDecodedVideoTimeNs = frameTimeNs;
+    this.#videoDecodeMs = updateDecodeDurationEwma(this.#videoDecodeMs, output.decodeMs);
 
     if (
       this.#isPlaying &&
-      shouldDropDecodedH264Frame(this.#playbackTimeNs, frameTimeNs)
+      shouldDropDecodedVideoFrame(this.#playbackTimeNs, frameTimeNs)
     ) {
       output.videoFrame.close();
-      this.#droppedH264Frames += 1;
-      this.#updateH264Pressure();
+      this.#droppedVideoFrames += 1;
+      this.#updateVideoPressure();
       this.#emitMetricsIfDue();
       return;
     }
 
-    if (this.#pendingDecodedH264) {
-      this.#pendingDecodedH264.videoFrame.close();
-      this.#droppedH264Frames += 1;
+    if (this.#pendingDecodedVideo) {
+      this.#pendingDecodedVideo.videoFrame.close();
+      this.#droppedVideoFrames += 1;
     }
-    this.#pendingDecodedH264 = {
+    this.#pendingDecodedVideo = {
       videoFrame: output.videoFrame,
       sourceFrame: output.sourceFrame,
     };
-    this.#scheduleH264Render();
-    this.#updateH264Pressure();
+    this.#scheduleVideoRender();
+    this.#updateVideoPressure();
     this.#emitMetricsIfDue();
   }
 
-  #scheduleH264Render(): void {
-    if (this.#h264RenderTimer != null || !this.#pendingDecodedH264) {
+  #scheduleVideoRender(): void {
+    if (this.#videoRenderTimer != null || !this.#pendingDecodedVideo) {
       return;
     }
     const renderIntervalMs =
-      this.#h264Pressure.mode === 'normal'
-        ? H264_RENDER_INTERVAL_MS
-        : H264_PRESSURED_RENDER_INTERVAL_MS;
+      this.#videoPressure.mode === 'normal'
+        ? VIDEO_RENDER_INTERVAL_MS
+        : VIDEO_PRESSURED_RENDER_INTERVAL_MS;
     const delayMs = Math.max(
       0,
-      renderIntervalMs - (performance.now() - this.#lastH264RenderAt),
+      renderIntervalMs - (performance.now() - this.#lastVideoRenderAt),
     );
     if (delayMs <= 0) {
-      void this.#renderPendingH264Output();
+      void this.#renderPendingVideoOutput();
       return;
     }
-    this.#h264RenderTimer = setTimeout(() => {
-      this.#h264RenderTimer = null;
-      void this.#renderPendingH264Output();
+    this.#videoRenderTimer = setTimeout(() => {
+      this.#videoRenderTimer = null;
+      void this.#renderPendingVideoOutput();
     }, delayMs);
   }
 
-  async #renderPendingH264Output(): Promise<void> {
-    const pending = this.#pendingDecodedH264;
-    this.#pendingDecodedH264 = null;
+  async #renderPendingVideoOutput(): Promise<void> {
+    const pending = this.#pendingDecodedVideo;
+    this.#pendingDecodedVideo = null;
     if (!pending) {
       return;
     }
@@ -833,29 +846,29 @@ class ImageRenderWorkerRuntime {
       const frameTimeNs = timeToKey(sourceFrame.receiveTime);
       if (
         this.#isPlaying &&
-        shouldDropDecodedH264Frame(this.#playbackTimeNs, frameTimeNs)
+        shouldDropDecodedVideoFrame(this.#playbackTimeNs, frameTimeNs)
       ) {
-        this.#droppedH264Frames += 1;
+        this.#droppedVideoFrames += 1;
         return;
       }
 
       const width = videoFrame.displayWidth || videoFrame.codedWidth;
       const height = videoFrame.displayHeight || videoFrame.codedHeight;
       if (!this.#drawCanvasImageSource(videoFrame, width, height, sourceFrame.publishTime)) {
-        this.#droppedH264Frames += 1;
+        this.#droppedVideoFrames += 1;
         return;
       }
-      this.#lastH264RenderAt = now;
-      this.#renderedH264Frames += 1;
+      this.#lastVideoRenderAt = now;
+      this.#renderedVideoFrames += 1;
       this.#emitStatus({
         phase: 'ready',
         width,
         height,
-        encoding: sourceFrame.kind === 'compressed' ? sourceFrame.format : 'h264',
+        encoding: sourceFrame.kind === 'compressed' ? sourceFrame.format : (this.#activeVideoCodec ?? 'h264'),
         receiveTime: sourceFrame.receiveTime,
       });
 
-      if (this.#h264Pressure.mode === 'normal' && now - this.#lastH264BitmapAt >= 500) {
+      if (this.#videoPressure.mode === 'normal' && now - this.#lastVideoBitmapAt >= 500) {
         try {
           const bitmap = await createImageBitmap(videoFrame);
           if (discardStaleAsyncResult(bitmap, epoch, this.#epoch)) {
@@ -865,11 +878,11 @@ class ImageRenderWorkerRuntime {
             bitmap,
             width,
             height,
-            sourceFrame.kind === 'compressed' ? sourceFrame.format : 'h264',
+            sourceFrame.kind === 'compressed' ? sourceFrame.format : (this.#activeVideoCodec ?? 'h264'),
             sourceFrame.receiveTime,
             sourceFrame.publishTime,
           );
-          this.#lastH264BitmapAt = now;
+          this.#lastVideoBitmapAt = now;
         } catch {
           // The frame is already visible; resize caching is optional.
         }
@@ -877,86 +890,90 @@ class ImageRenderWorkerRuntime {
     } finally {
       videoFrame.close();
       this.#emitMetricsIfDue();
-      if (this.#pendingDecodedH264) {
-        this.#scheduleH264Render();
+      if (this.#pendingDecodedVideo) {
+        this.#scheduleVideoRender();
       }
     }
   }
 
-  #handleH264DecoderError(error: Error): void {
-    this.#resyncH264Decoder();
-    const recovery = selectLatestCompleteH264Gop(
-      this.#pendingH264Frames,
-      this.#h264RecentConfig,
-      true,
-    );
+  #handleVideoDecoderError(error: Error): void {
+    this.#resyncVideoDecoder();
+    const codec = this.#activeVideoCodec;
+    const recovery = codec
+      ? selectLatestCompleteVideoGop(
+          codec,
+          this.#pendingVideoFrames,
+          this.#videoRecentConfig,
+          true,
+        )
+      : { frames: [], droppedFrames: this.#pendingVideoFrames.length, resync: false };
     if (recovery.resync) {
-      this.#pendingH264Frames = recovery.frames;
-      this.#h264WaitingForIdr = false;
-      this.#droppedH264Frames += recovery.droppedFrames;
+      this.#pendingVideoFrames = recovery.frames;
+      this.#videoWaitingForRandomAccess = false;
+      this.#droppedVideoFrames += recovery.droppedFrames;
       void this.#drainLatestFrame();
     } else {
-      this.#droppedH264Frames += this.#pendingH264Frames.length;
-      this.#pendingH264Frames = [];
-      this.#h264WaitingForIdr = true;
-      this.#h264ConfigBeforeIdr = [...this.#h264RecentConfig];
+      this.#droppedVideoFrames += this.#pendingVideoFrames.length;
+      this.#pendingVideoFrames = [];
+      this.#videoWaitingForRandomAccess = true;
+      this.#videoConfigBeforeRandomAccess = [...this.#videoRecentConfig];
     }
-    if (this.#renderedH264Frames === 0 && !this.#cachedFrame) {
+    if (this.#renderedVideoFrames === 0 && !this.#cachedFrame) {
       this.#emitStatus({ phase: 'error', message: error.message });
     }
     this.#emitMetricsIfDue(true);
   }
 
-  #resyncH264Decoder(): void {
+  #resyncVideoDecoder(): void {
     this.#decoder.reset();
-    this.#disposePendingH264Output();
-    this.#h264NeedsResync = false;
-    this.#h264ResyncCount += 1;
-    this.#lastH264ResyncAt = performance.now();
+    this.#disposePendingVideoOutput();
+    this.#videoNeedsResync = false;
+    this.#videoResyncCount += 1;
+    this.#lastVideoResyncAt = performance.now();
   }
 
-  #disposePendingH264Output(): void {
-    if (this.#h264RenderTimer != null) {
-      clearTimeout(this.#h264RenderTimer);
-      this.#h264RenderTimer = null;
+  #disposePendingVideoOutput(): void {
+    if (this.#videoRenderTimer != null) {
+      clearTimeout(this.#videoRenderTimer);
+      this.#videoRenderTimer = null;
     }
-    this.#pendingDecodedH264?.videoFrame.close();
-    this.#pendingDecodedH264 = null;
+    this.#pendingDecodedVideo?.videoFrame.close();
+    this.#pendingDecodedVideo = null;
   }
 
-  #updateH264Pressure(): void {
-    const previousMode = this.#h264Pressure.mode;
+  #updateVideoPressure(): void {
+    const previousMode = this.#videoPressure.mode;
     const mediaLagMs =
-      !this.#isPlaying || this.#lastDecodedH264TimeNs == null
+      !this.#isPlaying || this.#lastDecodedVideoTimeNs == null
         ? 0
-        : decodedFrameLatenessMs(this.#playbackTimeNs, this.#lastDecodedH264TimeNs);
-    this.#h264Pressure = updateH264Pressure(this.#h264Pressure, {
-      queueFrames: this.#pendingH264Frames.length,
-      queueSpanMs: h264QueueSpanMs(this.#pendingH264Frames),
-      decodeMs: this.#h264DecodeMs,
+        : decodedFrameLatenessMs(this.#playbackTimeNs, this.#lastDecodedVideoTimeNs);
+    this.#videoPressure = updateVideoPressure(this.#videoPressure, {
+      queueFrames: this.#pendingVideoFrames.length,
+      queueSpanMs: videoQueueSpanMs(this.#pendingVideoFrames),
+      decodeMs: this.#videoDecodeMs,
       decodeQueueSize: this.#decoder.decodeQueueSize,
       mediaLagMs,
     });
-    if (previousMode !== this.#h264Pressure.mode) {
+    if (previousMode !== this.#videoPressure.mode) {
       this.#emitMetricsIfDue(true);
     }
   }
 
-  #resetH264RuntimeState(): void {
-    this.#h264Pressure = initialH264PressureState();
-    this.#h264DecodeMs = 0;
-    // After close()/configure(), WebCodecs requires the next VCL chunk to be an
-    // IDR. Keep recent SPS/PPS so a bare IDR can still reconfigure the decoder.
-    this.#h264WaitingForIdr = true;
-    this.#h264ConfigBeforeIdr = [...this.#h264RecentConfig];
-    this.#h264NeedsResync = false;
-    this.#lastH264RenderAt = -Infinity;
-    this.#lastH264BitmapAt = -Infinity;
-    this.#droppedH264Frames = 0;
-    this.#renderedH264Frames = 0;
-    this.#h264ResyncCount = 0;
-    this.#lastH264ResyncAt = -Infinity;
-    this.#lastDecodedH264TimeNs = null;
+  #resetVideoRuntimeState(): void {
+    this.#videoPressure = initialVideoPressureState();
+    this.#videoDecodeMs = 0;
+    // After close()/configure(), WebCodecs requires a fresh random-access unit.
+    // Keep recent VPS/SPS/PPS or SPS/PPS so a bare random-access frame can reconfigure.
+    this.#videoWaitingForRandomAccess = true;
+    this.#videoConfigBeforeRandomAccess = [...this.#videoRecentConfig];
+    this.#videoNeedsResync = false;
+    this.#lastVideoRenderAt = -Infinity;
+    this.#lastVideoBitmapAt = -Infinity;
+    this.#droppedVideoFrames = 0;
+    this.#renderedVideoFrames = 0;
+    this.#videoResyncCount = 0;
+    this.#lastVideoResyncAt = -Infinity;
+    this.#lastDecodedVideoTimeNs = null;
     this.#lastDrawnMediaTimeNs = null;
     this.#lastMetricsAt = -Infinity;
   }
@@ -968,19 +985,19 @@ class ImageRenderWorkerRuntime {
     }
     this.#lastMetricsAt = now;
     const mediaLagMs =
-      this.#lastDecodedH264TimeNs == null
+      this.#lastDecodedVideoTimeNs == null
         ? 0
-        : decodedFrameLatenessMs(this.#playbackTimeNs, this.#lastDecodedH264TimeNs);
+        : decodedFrameLatenessMs(this.#playbackTimeNs, this.#lastDecodedVideoTimeNs);
     const metrics: ImageRenderMetrics = {
-      pressureMode: this.#h264Pressure.mode,
-      queueFrames: this.#pendingH264Frames.length,
-      queueSpanMs: h264QueueSpanMs(this.#pendingH264Frames),
-      decodeMs: this.#h264DecodeMs,
-      droppedFrames: this.#droppedH264Frames,
-      renderedFrames: this.#renderedH264Frames,
+      pressureMode: this.#videoPressure.mode,
+      queueFrames: this.#pendingVideoFrames.length,
+      queueSpanMs: videoQueueSpanMs(this.#pendingVideoFrames),
+      decodeMs: this.#videoDecodeMs,
+      droppedFrames: this.#droppedVideoFrames,
+      renderedFrames: this.#renderedVideoFrames,
       decodeQueueSize: this.#decoder.decodeQueueSize,
       mediaLagMs,
-      resyncCount: this.#h264ResyncCount,
+      resyncCount: this.#videoResyncCount,
       codec: this.#decoder.codec,
     };
     workerScope.postMessage({ type: 'metrics', metrics } satisfies ImageRenderWorkerEvent);
@@ -1085,8 +1102,8 @@ class ImageRenderWorkerRuntime {
 
   #redrawCachedFrameForOverlay(): void {
     const cached = this.#cachedFrame;
-    if (cached?.kind === 'bitmap' && getCompressedKind(cached.encoding) === 'h264') {
-      // H.264 retains only a periodic bitmap for option and viewport redraws.
+    if (cached?.kind === 'bitmap' && videoCodecFromFormat(cached.encoding)) {
+      // Video retains only a periodic bitmap for option and viewport redraws.
       // Redraw it only when it is the frame still visible on the canvas.
       if (
         this.#lastDrawnMediaTimeNs !== null &&
@@ -1231,7 +1248,7 @@ class ImageRenderWorkerRuntime {
     ctx.fillRect(0, 0, viewportWidth, viewportHeight);
     ctx.imageSmoothingEnabled = this.#renderOptions.smoothing;
     ctx.imageSmoothingQuality =
-      this.#renderOptions.smoothing && this.#h264Pressure.mode === 'normal' ? 'high' : 'low';
+      this.#renderOptions.smoothing && this.#videoPressure.mode === 'normal' ? 'high' : 'low';
     ctx.translate(viewportWidth / 2, viewportHeight / 2);
     ctx.rotate((rotDeg * Math.PI) / 180);
     ctx.scale(this.#renderOptions.flipHorizontal ? -1 : 1, this.#renderOptions.flipVertical ? -1 : 1);
@@ -1270,7 +1287,7 @@ class ImageRenderWorkerRuntime {
 
   #renderDevicePixelRatio(): number {
     const dpr = Math.max(1, this.#viewport.devicePixelRatio);
-    return this.#h264Pressure.mode === 'normal' ? dpr : Math.min(dpr, 1);
+    return this.#videoPressure.mode === 'normal' ? dpr : Math.min(dpr, 1);
   }
 
   #clearCanvas(): void {
@@ -1333,20 +1350,26 @@ function ensureOwnedBytes(data: Uint8Array): Uint8Array<ArrayBuffer> {
   return cloneBytes(data);
 }
 
-function isH264Frame(frame: ImageWorkerFrameEnvelope): boolean {
-  return frame.kind === 'compressed' && getCompressedKind(frame.format) === 'h264';
+function videoCodecForFrame(frame: ImageWorkerFrameEnvelope): VideoCodec | null {
+  return frame.kind === 'compressed' ? videoCodecFromFormat(frame.format) : null;
 }
 
-function h264QueueSpanMs(frames: ImageWorkerFrameEnvelope[]): number {
+function isVideoFrame(frame: ImageWorkerFrameEnvelope): boolean {
+  return videoCodecForFrame(frame) !== null;
+}
+
+function videoQueueSpanMs(frames: ImageWorkerFrameEnvelope[]): number {
   if (frames.length < 2) {
     return 0;
   }
-  const first = frames.find(
-    (frame) => !isH264Frame(frame) || !isH264ConfigOnly(frame.data),
-  );
-  const last = frames.findLast(
-    (frame) => !isH264Frame(frame) || !isH264ConfigOnly(frame.data),
-  );
+  const first = frames.find((frame) => {
+    const codec = videoCodecForFrame(frame);
+    return !codec || !isVideoConfigOnly(codec, frame.data);
+  });
+  const last = frames.findLast((frame) => {
+    const codec = videoCodecForFrame(frame);
+    return !codec || !isVideoConfigOnly(codec, frame.data);
+  });
   if (!first || !last) {
     return 0;
   }

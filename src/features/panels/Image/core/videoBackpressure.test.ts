@@ -1,15 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import {
-  H264_MAX_PENDING_FRAMES,
-  H264_MAX_PENDING_SPAN_MS,
+  VIDEO_MAX_PENDING_FRAMES,
+  VIDEO_MAX_PENDING_SPAN_MS,
   decodedFrameLatenessMs,
-  initialH264PressureState,
-  isH264HardLimitExceeded,
+  initialVideoPressureState,
+  isVideoHardLimitExceeded,
   isRetrogradeMediaFrame,
-  shouldDropDecodedH264Frame,
+  shouldDropDecodedVideoFrame,
   updateDecodeDurationEwma,
-  updateH264Pressure,
-} from './h264Backpressure';
+  updateVideoPressure,
+} from './videoBackpressure';
 
 const healthy = {
   queueFrames: 2,
@@ -19,15 +19,15 @@ const healthy = {
   mediaLagMs: 20,
 };
 
-describe('H.264 adaptive backpressure', () => {
+describe('video adaptive backpressure', () => {
   it('treats frame count and queue span as strict hard bounds', () => {
-    expect(isH264HardLimitExceeded(H264_MAX_PENDING_FRAMES, H264_MAX_PENDING_SPAN_MS)).toBe(false);
-    expect(isH264HardLimitExceeded(H264_MAX_PENDING_FRAMES + 1, 0)).toBe(true);
-    expect(isH264HardLimitExceeded(1, H264_MAX_PENDING_SPAN_MS + 1)).toBe(true);
+    expect(isVideoHardLimitExceeded(VIDEO_MAX_PENDING_FRAMES, VIDEO_MAX_PENDING_SPAN_MS)).toBe(false);
+    expect(isVideoHardLimitExceeded(VIDEO_MAX_PENDING_FRAMES + 1, 0)).toBe(true);
+    expect(isVideoHardLimitExceeded(1, VIDEO_MAX_PENDING_SPAN_MS + 1)).toBe(true);
   });
 
   it('enters degraded mode from queue time span even below the frame bound', () => {
-    const next = updateH264Pressure(initialH264PressureState(), {
+    const next = updateVideoPressure(initialVideoPressureState(), {
       queueFrames: 20,
       queueSpanMs: 400,
       decodeMs: 10,
@@ -38,27 +38,27 @@ describe('H.264 adaptive backpressure', () => {
   });
 
   it('uses hysteresis before returning to normal', () => {
-    let state = updateH264Pressure(initialH264PressureState(), {
+    let state = updateVideoPressure(initialVideoPressureState(), {
       queueFrames: 80,
       queueSpanMs: 500,
       decodeMs: 60,
       decodeQueueSize: 8,
       mediaLagMs: 500,
     });
-    state = updateH264Pressure(state, healthy);
+    state = updateVideoPressure(state, healthy);
     expect(state.mode).toBe('recovery');
 
     for (let i = 0; i < 10; i++) {
-      state = updateH264Pressure(state, healthy);
+      state = updateVideoPressure(state, healthy);
     }
     expect(state.mode).toBe('recovery');
-    state = updateH264Pressure(state, healthy);
+    state = updateVideoPressure(state, healthy);
     expect(state.mode).toBe('normal');
   });
 
   it('relapses quickly when recovery pressure rises again', () => {
     let state = { mode: 'degraded' as const, healthySamples: 0 };
-    state = updateH264Pressure(state, {
+    state = updateVideoPressure(state, {
       queueFrames: 0,
       queueSpanMs: 0,
       decodeMs: 5,
@@ -66,7 +66,7 @@ describe('H.264 adaptive backpressure', () => {
       mediaLagMs: 0,
     });
     expect(state.mode).toBe('recovery');
-    state = updateH264Pressure(state, {
+    state = updateVideoPressure(state, {
       queueFrames: 45,
       queueSpanMs: 300,
       decodeMs: 20,
@@ -82,11 +82,11 @@ describe('H.264 adaptive backpressure', () => {
   });
 
   it('uses actual media lag instead of playback speed', () => {
-    const overloaded = updateH264Pressure(initialH264PressureState(), {
+    const overloaded = updateVideoPressure(initialVideoPressureState(), {
       ...healthy,
       mediaLagMs: 400,
     });
-    const capable = updateH264Pressure(initialH264PressureState(), healthy);
+    const capable = updateVideoPressure(initialVideoPressureState(), healthy);
 
     expect(overloaded.mode).toBe('degraded');
     expect(capable.mode).toBe('normal');
@@ -95,9 +95,9 @@ describe('H.264 adaptive backpressure', () => {
   it('drops decoded output only after it misses the media deadline', () => {
     const playback = 1_000_000_000n;
     expect(decodedFrameLatenessMs(playback, 950_000_000n)).toBe(50);
-    expect(shouldDropDecodedH264Frame(playback, 900_000_000n)).toBe(false);
-    expect(shouldDropDecodedH264Frame(playback, 850_000_000n)).toBe(true);
-    expect(shouldDropDecodedH264Frame(null, 0n)).toBe(false);
+    expect(shouldDropDecodedVideoFrame(playback, 900_000_000n)).toBe(false);
+    expect(shouldDropDecodedVideoFrame(playback, 850_000_000n)).toBe(true);
+    expect(shouldDropDecodedVideoFrame(null, 0n)).toBe(false);
   });
 
   it('rejects backward frame paints only during playback', () => {

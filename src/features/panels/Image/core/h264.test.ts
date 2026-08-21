@@ -3,10 +3,10 @@ import {
   containsH264IdrNal,
   getH264ChunkType,
   getH264CodecCandidates,
-  monotonicH264TimestampUs,
   parseH264SpsCodec,
   scanH264NalTypes,
 } from './h264';
+import { monotonicVideoTimestampUs } from './videoCodec';
 
 describe('H.264 NAL parsing', () => {
   it('detects IDR frames in Annex-B chunks', () => {
@@ -69,9 +69,9 @@ describe('H.264 NAL parsing', () => {
   });
 
   it('uses source microseconds while forcing repeats and rewinds to stay monotonic', () => {
-    const first = monotonicH264TimestampUs(1_234_567_890n, -1);
-    const repeated = monotonicH264TimestampUs(1_234_567_890n, first);
-    const rewound = monotonicH264TimestampUs(1_000_000_000n, repeated);
+    const first = monotonicVideoTimestampUs(1_234_567_890n, -1);
+    const repeated = monotonicVideoTimestampUs(1_234_567_890n, first);
+    const rewound = monotonicVideoTimestampUs(1_000_000_000n, repeated);
 
     expect(first).toBe(1_234_567);
     expect(repeated).toBe(1_234_568);

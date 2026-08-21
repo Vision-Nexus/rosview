@@ -228,13 +228,13 @@ async function readImagePanels(page) {
       return Number.isFinite(number) ? number : null;
     };
     return {
-      pressure: element.getAttribute('data-h264-pressure'),
-      queueFrames: numberAttribute('data-h264-queue-frames'),
-      droppedFrames: numberAttribute('data-h264-dropped-frames'),
-      decodeQueueSize: numberAttribute('data-h264-decode-queue'),
-      mediaLagMs: numberAttribute('data-h264-media-lag-ms'),
-      resyncCount: numberAttribute('data-h264-resync-count'),
-      renderedFrames: numberAttribute('data-h264-rendered-frames'),
+      pressure: element.getAttribute('data-video-pressure'),
+      queueFrames: numberAttribute('data-video-queue-frames'),
+      droppedFrames: numberAttribute('data-video-dropped-frames'),
+      decodeQueueSize: numberAttribute('data-video-decode-queue'),
+      mediaLagMs: numberAttribute('data-video-media-lag-ms'),
+      resyncCount: numberAttribute('data-video-resync-count'),
+      renderedFrames: numberAttribute('data-video-rendered-frames'),
     };
   }));
 }

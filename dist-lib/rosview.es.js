@@ -7,7 +7,7 @@ import { _ as rt, a as it, b as at, c as F, d as ot, f as st, h as ct, i as lt, 
 import { _ as xt, a as St, d as Ct, f as wt, h as Tt, i as Et, m as Dt, n as Ot, o as kt, p as At, r as jt, s as Mt, t as Nt, u as Pt } from "./rosMessageTypes-Di-HH75w.js";
 import { t as Ft } from "./messageBus-tPJ7Uycq.js";
 import { n as It } from "./useMessageBus-zT5FCuxY.js";
-import { a as Lt, f as Rt, i as zt, o as Bt, p as Vt, r as Ht, s as Ut, t as Wt, u as Gt } from "./imageAnnotations-DExs4EhW.js";
+import { a as Lt, d as Rt, f as zt, i as Bt, o as Vt, r as Ht, s as Ut, t as Wt, u as Gt } from "./imageAnnotations-DwyUos7b.js";
 import { n as Kt, t as qt } from "./defaults-CrWOF-m4.js";
 import { t as Jt } from "./shallow-DHPf4mbW.js";
 import { a as Yt, i as Xt, o as L, r as Zt, t as Qt } from "./time-BoEDgjoH.js";
@@ -2145,10 +2145,10 @@ function js({ config: e, setConfig: t, topics: r }) {
 	}, {
 		value: "rainbow",
 		label: i({ id: "panels.image.settings.enum.colorMap.rainbow" })
-	}], [i]), c = H(() => r.find((t) => t.name === e.topic), [r, e.topic]), l = !!(c && Vt(c.type)), u = As(e.topic), d = u != null && Ds.has(u), f = u != null && Os.has(u), p = l || u != null, m = l && u == null, h = d || m, g = d && u ? u : m ? "mono16" : null, _ = g != null && Ds.has(g) ? ks(g) : {
+	}], [i]), c = H(() => r.find((t) => t.name === e.topic), [r, e.topic]), l = !!(c && zt(c.type)), u = As(e.topic), d = u != null && Ds.has(u), f = u != null && Os.has(u), p = l || u != null, m = l && u == null, h = d || m, g = d && u ? u : m ? "mono16" : null, _ = g != null && Ds.has(g) ? ks(g) : {
 		min: 0,
 		max: 65535
-	}, v = g == null ? _.max : zt(g, e.topic), y = g == null ? _.min : Lt(g, e.topic);
+	}, v = g == null ? _.max : Bt(g, e.topic), y = g == null ? _.min : Lt(g, e.topic);
 	return /* @__PURE__ */ K("div", {
 		className: "space-y-2",
 		children: [
@@ -2164,7 +2164,7 @@ function js({ config: e, setConfig: t, topics: r }) {
 								t(Ht(n, e));
 							},
 							topics: r,
-							typeIncludes: [...Bt],
+							typeIncludes: [...Vt],
 							placeholder: i({ id: "panels.image.settings.field.topic.placeholder" })
 						})
 					}),
@@ -2450,7 +2450,7 @@ function js({ config: e, setConfig: t, topics: r }) {
 }
 //#endregion
 //#region src/features/panels/Image/definition.tsx
-var Ms = rn(async () => ({ default: (await import("./ImagePanel-98qm1TxM.js")).ImagePanel })), Ns = {
+var Ms = rn(async () => ({ default: (await import("./ImagePanel-CMJSQH3Q.js")).ImagePanel })), Ns = {
 	type: "Image",
 	defaultTitle: "Image",
 	schemaSupport: { supportedSchemas: [

@@ -5,6 +5,7 @@ import {
   isCompressedDepthFormat,
   isCompressedVideoMessage,
   isH264CompressedFrameMessage,
+  isH265CompressedFrameMessage,
   isImagePanelTopicSchema,
   isRawImageTopicSchema,
   normalizeCompressedMime,
@@ -107,6 +108,14 @@ describe('isH264CompressedFrameMessage', () => {
   });
 });
 
+describe('isH265CompressedFrameMessage', () => {
+  it('recognizes h265 and hevc format tokens without admitting unrelated codecs', () => {
+    expect(isH265CompressedFrameMessage({ format: 'h265', data: new Uint8Array([0]) })).toBe(true);
+    expect(isH265CompressedFrameMessage({ format: 'hevc', data: new Uint8Array([0]) })).toBe(true);
+    expect(isH265CompressedFrameMessage({ format: 'h264', data: new Uint8Array([0]) })).toBe(false);
+  });
+});
+
 describe('topicNeedsOrderedVideoFrames', () => {
   it('returns true for foxglove CompressedVideo schemas', () => {
     expect(topicNeedsOrderedVideoFrames('foxglove_msgs/msg/CompressedVideo')).toBe(true);
@@ -204,6 +213,16 @@ describe('normalizeCompressedMime', () => {
   it('still recognizes explicit codec hints in compound format strings', () => {
     expect(normalizeCompressedMime('rgb8; jpeg compressed bgr8')).toBe('image/jpeg');
     expect(normalizeCompressedMime('image/png')).toBe('image/png');
+  });
+});
+
+describe('getCompressedKind video classification', () => {
+  it('uses the same accepted codec tokens as the ordered video path', () => {
+    expect(getCompressedKind('avc')).toBe('h264');
+    expect(getCompressedKind('video/avc')).toBe('h264');
+    expect(getCompressedKind('h265')).toBe('h265');
+    expect(getCompressedKind('hevc')).toBe('h265');
+    expect(getCompressedKind('vp9')).toBeNull();
   });
 });
 

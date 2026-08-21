@@ -71,7 +71,7 @@ ROS View is a **browser-native** playback and visualization tool for robotics re
 
 | Panel | Description | Typical Topics |
 |-------|-------------|----------------|
-| **Image** | Camera image stream (JPEG/PNG/H264 decode) | `sensor_msgs/Image`, `sensor_msgs/CompressedImage` |
+| **Image** | Camera image stream (JPEG/PNG/H.264/H.265 decode; HEVC depends on browser WebCodecs support) | `sensor_msgs/Image`, `sensor_msgs/CompressedImage`, `foxglove_msgs/msg/CompressedVideo` |
 | **Plot** | Numeric time-series chart, multiple topics overlay | Any message with numeric fields |
 | **3D** | Point cloud, URDF model, TF transform visualization | `sensor_msgs/PointCloud2`, `tf2_msgs/TFMessage`, URDF |
 | **RawMessages** | Raw message JSON tree viewer | Any topic |
