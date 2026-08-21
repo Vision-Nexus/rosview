@@ -17,8 +17,8 @@ import {
   topicNeedsOrderedVideoFrames,
   type ImageSurfaceStatus,
 } from './core/imageTypes';
-import { executeH264Bootstrap } from './core/h264SeekRepair';
-import { isH264MessageEvent, toWorkerFrame } from './core/messageFrameAdapter';
+import { executeVideoBootstrap } from './core/videoSeekRepair';
+import { isVideoMessageEvent, toWorkerFrame, videoCodecForMessageEvent } from './core/messageFrameAdapter';
 import { applyDepthTopicPreset } from './core/depthColorDefaults';
 import { parseImageAnnotations } from './core/imageAnnotations';
 import type { ImageConfig } from './defaults';
@@ -81,12 +81,12 @@ export const ImagePanel: React.FC<ImagePanelProps> = (props) => {
   const transferredCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const lastPlaybackTimeNsRef = useRef<bigint | null>(null);
   const seekRepairGenerationRef = useRef(0);
-  const h264SeekRepairAbortRef = useRef<AbortController | null>(null);
   const lastUiStatusRef = useRef<ImageSurfaceStatus>({ phase: 'idle' });
-  const h264OrderedModeRef = useRef(false);
-  const h264BootstrapInFlightRef = useRef(false);
-  const h264BootstrapGenerationRef = useRef(0);
-  const h264BufferedLiveRef = useRef<RosMessageEvent[]>([]);
+  const videoSeekRepairAbortRef = useRef<AbortController | null>(null);
+  const videoOrderedModeRef = useRef(false);
+  const videoBootstrapInFlightRef = useRef(false);
+  const videoBootstrapGenerationRef = useRef(0);
+  const videoBufferedLiveRef = useRef<RosMessageEvent[]>([]);
   const consumerModeRef = useRef<'latest' | 'all'>('latest');
   const [status, setStatus] = useState<ImageSurfaceStatus>({ phase: 'idle' });
   const [metrics, setMetrics] = useState<ImageRenderMetrics | null>(null);
@@ -223,23 +223,23 @@ export const ImagePanel: React.FC<ImagePanelProps> = (props) => {
       return;
     }
 
-    h264OrderedModeRef.current = false;
-    h264BootstrapInFlightRef.current = false;
-    h264BootstrapGenerationRef.current += 1;
-    h264BufferedLiveRef.current = [];
+    videoOrderedModeRef.current = false;
+    videoBootstrapInFlightRef.current = false;
+    videoBootstrapGenerationRef.current += 1;
+    videoBufferedLiveRef.current = [];
     consumerModeRef.current = 'latest';
     setMetrics(null);
     worker.postMessage({ type: 'reset' } satisfies ImageRenderWorkerRequest);
 
     const initialOrdered = topicNeedsOrderedVideoFrames(topicSchema);
     if (initialOrdered) {
-      h264OrderedModeRef.current = true;
+      videoOrderedModeRef.current = true;
       consumerModeRef.current = 'all';
     }
 
-    const handleH264Frame = (event: RosMessageEvent) => {
-      if (h264BootstrapInFlightRef.current) {
-        h264BufferedLiveRef.current.push(event);
+    const handleVideoFrame = (event: RosMessageEvent) => {
+      if (videoBootstrapInFlightRef.current) {
+        videoBufferedLiveRef.current.push(event);
         return;
       }
       postImageFrame(worker, event);
@@ -247,8 +247,8 @@ export const ImagePanel: React.FC<ImagePanelProps> = (props) => {
 
     const dispatchHighFrequencyBatch = (messages: RosMessageEvent[]) => {
       for (const event of messages) {
-        if (isH264MessageEvent(event)) {
-          handleH264Frame(event);
+        if (isVideoMessageEvent(event)) {
+          handleVideoFrame(event);
         } else {
           postImageFrame(worker, event);
         }
@@ -262,50 +262,51 @@ export const ImagePanel: React.FC<ImagePanelProps> = (props) => {
       if (!targetTime) {
         return false;
       }
-      const generation = h264BootstrapGenerationRef.current;
-      h264BootstrapInFlightRef.current = true;
-      h264SeekRepairAbortRef.current?.abort();
+      const generation = videoBootstrapGenerationRef.current;
+      videoBootstrapInFlightRef.current = true;
+      videoSeekRepairAbortRef.current?.abort();
       const controller = new AbortController();
-      h264SeekRepairAbortRef.current = controller;
+      videoSeekRepairAbortRef.current = controller;
 
       try {
-        const success = await executeH264Bootstrap({
+        const success = await executeVideoBootstrap({
           player,
           worker,
           topic,
           targetTime,
-          liveEvents: h264BufferedLiveRef.current,
+          codec: videoBufferedLiveRef.current.map(videoCodecForMessageEvent).find(Boolean) ?? undefined,
+          liveEvents: videoBufferedLiveRef.current,
           signal: controller.signal,
           preserveFrame,
         });
-        if (controller.signal.aborted || generation !== h264BootstrapGenerationRef.current) {
+        if (controller.signal.aborted || generation !== videoBootstrapGenerationRef.current) {
           return false;
         }
         if (success) {
-          h264BufferedLiveRef.current = [];
+          videoBufferedLiveRef.current = [];
         }
         return success;
       } finally {
-        if (generation === h264BootstrapGenerationRef.current) {
-          h264BootstrapInFlightRef.current = false;
+        if (generation === videoBootstrapGenerationRef.current) {
+          videoBootstrapInFlightRef.current = false;
         }
-        if (h264SeekRepairAbortRef.current === controller) {
-          h264SeekRepairAbortRef.current = null;
+        if (videoSeekRepairAbortRef.current === controller) {
+          videoSeekRepairAbortRef.current = null;
         }
       }
     };
 
-    const activateH264OrderedMode = async (triggerMessage?: RosMessageEvent) => {
-      if (h264OrderedModeRef.current) {
+    const activateVideoOrderedMode = async (triggerMessage?: RosMessageEvent) => {
+      if (videoOrderedModeRef.current) {
         if (triggerMessage) {
-          handleH264Frame(triggerMessage);
+          handleVideoFrame(triggerMessage);
         }
         return;
       }
 
-      h264OrderedModeRef.current = true;
+      videoOrderedModeRef.current = true;
       if (triggerMessage) {
-        h264BufferedLiveRef.current.push(triggerMessage);
+        videoBufferedLiveRef.current.push(triggerMessage);
       }
 
       if (consumerModeRef.current !== 'all') {
@@ -326,12 +327,12 @@ export const ImagePanel: React.FC<ImagePanelProps> = (props) => {
     };
 
     const handleMessage = (message: RosMessageEvent) => {
-      if (isH264MessageEvent(message)) {
-        if (!h264OrderedModeRef.current) {
-          void activateH264OrderedMode(message);
+      if (isVideoMessageEvent(message)) {
+        if (!videoOrderedModeRef.current) {
+          void activateVideoOrderedMode(message);
           return;
         }
-        handleH264Frame(message);
+        handleVideoFrame(message);
         return;
       }
       postImageFrame(worker, message);
@@ -355,7 +356,7 @@ export const ImagePanel: React.FC<ImagePanelProps> = (props) => {
         mode: 'latest',
         onLatestMessage: handleMessage,
         onMessageBatch: (messages) => {
-          if (h264OrderedModeRef.current) {
+          if (videoOrderedModeRef.current) {
             return;
           }
           const latest = messages.at(-1);
@@ -367,11 +368,11 @@ export const ImagePanel: React.FC<ImagePanelProps> = (props) => {
     }
 
     return () => {
-      h264BootstrapGenerationRef.current += 1;
-      h264SeekRepairAbortRef.current?.abort();
-      h264SeekRepairAbortRef.current = null;
-      h264BufferedLiveRef.current = [];
-      h264BootstrapInFlightRef.current = false;
+      videoBootstrapGenerationRef.current += 1;
+      videoSeekRepairAbortRef.current?.abort();
+      videoSeekRepairAbortRef.current = null;
+      videoBufferedLiveRef.current = [];
+      videoBootstrapInFlightRef.current = false;
       player.unregisterHighFrequencyConsumer(imageConsumerId);
       worker.postMessage({ type: 'reset' } satisfies ImageRenderWorkerRequest);
     };
@@ -379,8 +380,8 @@ export const ImagePanel: React.FC<ImagePanelProps> = (props) => {
 
   useEffect(() => {
     return () => {
-      h264SeekRepairAbortRef.current?.abort();
-      h264SeekRepairAbortRef.current = null;
+      videoSeekRepairAbortRef.current?.abort();
+      videoSeekRepairAbortRef.current = null;
     };
   }, [player, topic]);
 
@@ -428,39 +429,40 @@ export const ImagePanel: React.FC<ImagePanelProps> = (props) => {
       if (previousNs != null && nowNs + 5_000_000n < previousNs) {
         const repairGeneration = seekRepairGenerationRef.current;
         const worker = workerRef.current;
-        const stillImageTopic = worker && topic && !h264OrderedModeRef.current ? topic : null;
-        h264SeekRepairAbortRef.current?.abort();
-        h264SeekRepairAbortRef.current = null;
-        if (worker && topic && h264OrderedModeRef.current) {
-          h264BootstrapInFlightRef.current = true;
-          h264BufferedLiveRef.current = [];
-          const generation = h264BootstrapGenerationRef.current;
+        const stillImageTopic = worker && topic && !videoOrderedModeRef.current ? topic : null;
+        videoSeekRepairAbortRef.current?.abort();
+        videoSeekRepairAbortRef.current = null;
+        if (worker && topic && videoOrderedModeRef.current) {
+          videoBootstrapInFlightRef.current = true;
+          videoBufferedLiveRef.current = [];
+          const generation = videoBootstrapGenerationRef.current;
           const controller = new AbortController();
-          h264SeekRepairAbortRef.current = controller;
+          videoSeekRepairAbortRef.current = controller;
           void (async () => {
             try {
-              const success = await executeH264Bootstrap({
+              const success = await executeVideoBootstrap({
                 player,
                 worker,
                 topic,
                 targetTime: time,
-                liveEvents: h264BufferedLiveRef.current,
+                codec: videoBufferedLiveRef.current.map(videoCodecForMessageEvent).find(Boolean) ?? undefined,
+                liveEvents: videoBufferedLiveRef.current,
                 signal: controller.signal,
                 preserveFrame: true,
               });
               if (
                 success &&
                 !controller.signal.aborted &&
-                generation === h264BootstrapGenerationRef.current
+                generation === videoBootstrapGenerationRef.current
               ) {
-                h264BufferedLiveRef.current = [];
+                videoBufferedLiveRef.current = [];
               }
             } finally {
-              if (generation === h264BootstrapGenerationRef.current) {
-                h264BootstrapInFlightRef.current = false;
+              if (generation === videoBootstrapGenerationRef.current) {
+                videoBootstrapInFlightRef.current = false;
               }
-              if (h264SeekRepairAbortRef.current === controller) {
-                h264SeekRepairAbortRef.current = null;
+              if (videoSeekRepairAbortRef.current === controller) {
+                videoSeekRepairAbortRef.current = null;
               }
             }
           })();
@@ -538,13 +540,14 @@ export const ImagePanel: React.FC<ImagePanelProps> = (props) => {
       className="flex flex-col h-full overflow-hidden relative"
       style={{ background: backgroundColor }}
       data-testid="image-panel"
-      data-h264-pressure={metrics?.pressureMode}
-      data-h264-queue-frames={metrics?.queueFrames}
-      data-h264-dropped-frames={metrics?.droppedFrames}
-      data-h264-decode-queue={metrics?.decodeQueueSize}
-      data-h264-media-lag-ms={metrics?.mediaLagMs}
-      data-h264-resync-count={metrics?.resyncCount}
-      data-h264-rendered-frames={metrics?.renderedFrames}
+      data-video-codec={metrics?.codec}
+      data-video-pressure={metrics?.pressureMode}
+      data-video-queue-frames={metrics?.queueFrames}
+      data-video-dropped-frames={metrics?.droppedFrames}
+      data-video-decode-queue={metrics?.decodeQueueSize}
+      data-video-media-lag-ms={metrics?.mediaLagMs}
+      data-video-resync-count={metrics?.resyncCount}
+      data-video-rendered-frames={metrics?.renderedFrames}
     >
       <PanelTopicBar className="border-zinc-800 bg-zinc-950">
         <TopicQuickPicker

@@ -65,7 +65,7 @@
 
 | 面板类型 | 说明 | 订阅的典型 Topic 类型 |
 |----------|------|----------------------|
-| **Image** | 显示相机图像流（JPEG/PNG/H264 解码） | `sensor_msgs/Image`, `sensor_msgs/CompressedImage` |
+| **Image** | 显示相机图像流（JPEG/PNG/H.264/H.265 解码；HEVC 取决于浏览器 WebCodecs 支持） | `sensor_msgs/Image`、`sensor_msgs/CompressedImage`、`foxglove_msgs/msg/CompressedVideo` |
 | **Plot** | 数值曲线图，支持多 Topic 叠加 | 任意含数值字段的消息（如 `std_msgs/Float64`） |
 | **3D** | 点云、URDF 模型、TF 坐标变换可视化 | `sensor_msgs/PointCloud2`, `tf2_msgs/TFMessage`, URDF |
 | **RawMessages** | 原始消息 JSON 树形查看器 | 任意 Topic |

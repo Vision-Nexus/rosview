@@ -41,7 +41,7 @@ Supports **MCAP**, **ROS 1 bag**, **ROS 2 db3**, **HDF5**, and **BVH** files. Av
 - **Zero-copy parsing** — dedicated Web Workers + Comlink; main thread is never blocked
 - **HTTP Range streaming** — load remote files without downloading them in full
 - **Multi-panel layout** — draggable, dockable panels powered by DockView
-- **Visualization panels** — Image (H.264), 3D (point clouds, URDF, TF), Plot (uPlot), Joints, Map, Audio, RawMessages, TopicGraph, Pose
+- **Visualization panels** — Image (JPEG/PNG/H.264/H.265; HEVC needs browser WebCodecs support), 3D (point clouds, URDF, TF), Plot (uPlot), Joints, Map, Audio, RawMessages, TopicGraph, Pose
 - **Internationalization** — English · Simplified Chinese · Japanese
 - **Dark / light / system** theme
 - **Extension API** — register third-party sidebar tabs and playback-track overlay regions

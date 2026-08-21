@@ -3,10 +3,10 @@ import type { ImageWorkerFrameEnvelope } from './imageWorkerProtocol';
 import {
   getCompressedFrameFormat,
   isCompressedFrameMessage,
-  isH264CompressedFrameMessage,
   isRawImageMessage,
   prepareImageWorkerBytes,
 } from './imageTypes';
+import { type VideoCodec, videoCodecFromFormat } from './videoCodec';
 
 export type PreparedImageWorkerFrame = {
   frame: ImageWorkerFrameEnvelope;
@@ -61,17 +61,20 @@ export function toWorkerFrame(
   return null;
 }
 
-export function isH264MessageEvent(messageEvent: RosMessageEvent): boolean {
-  return isH264CompressedFrameMessage(messageEvent.message);
+export function videoCodecForMessageEvent(messageEvent: RosMessageEvent): VideoCodec | null {
+  const message = messageEvent.message;
+  return isCompressedFrameMessage(message)
+    ? videoCodecFromFormat(getCompressedFrameFormat(message))
+    : null;
 }
 
-export function getH264MessagePayload(messageEvent: RosMessageEvent): Uint8Array | null {
+export function isVideoMessageEvent(messageEvent: RosMessageEvent): boolean {
+  return videoCodecForMessageEvent(messageEvent) !== null;
+}
+
+export function getVideoMessagePayload(messageEvent: RosMessageEvent): Uint8Array | null {
   const message = messageEvent.message;
-  if (!isCompressedFrameMessage(message)) {
-    return null;
-  }
-  if (!isH264CompressedFrameMessage(message)) {
-    return null;
-  }
-  return message.data;
+  return isCompressedFrameMessage(message) && videoCodecFromFormat(message.format)
+    ? message.data
+    : null;
 }
