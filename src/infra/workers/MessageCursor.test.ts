@@ -190,4 +190,35 @@ describe('MessageCursor', () => {
 
     await cursor.end();
   });
+
+  it('backpressures the pump at its configured duration cap', async () => {
+    let calls = 0;
+    const iterator: AsyncIterableIterator<MessageEvent> = {
+      async next() {
+        if (calls >= 3) {
+          return { done: true, value: undefined };
+        }
+        const value = message(calls);
+        calls += 1;
+        return { done: false, value };
+      },
+      [Symbol.asyncIterator]() {
+        return this;
+      },
+    };
+
+    const cursor = new MessageCursor(iterator, {
+      mode: 'comlink',
+      binaryPayloadThresholdBytes: 64 * 1024,
+      maxBufferDurationMs: 1_000,
+    });
+    await flushAsyncWork();
+
+    expect(calls).toBe(2);
+    expect((await cursor.nextBatch(1_000)).map((event) => event.receiveTime.sec)).toEqual([0, 1]);
+
+    await flushAsyncWork();
+    expect(calls).toBe(3);
+    await cursor.end();
+  });
 });

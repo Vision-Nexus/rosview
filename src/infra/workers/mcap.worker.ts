@@ -11,6 +11,7 @@ import type {
   IMessageCursor,
   PlaybackBufferStatus,
   PreparePlaybackBufferArgs,
+  SourceInitProgressCallback,
 } from "./types";
 import { McapIndexedIterableSource } from '@/infra/sources/McapIndexedIterableSource';
 import { loadDecompressHandlers } from '@/infra/sources/decompressHandlers';
@@ -18,6 +19,7 @@ import { MessageCursor } from "./MessageCursor";
 import { HttpFileReader } from '@/infra/services/HttpFileReader';
 import CachedFilelike from '@/infra/services/CachedFilelike';
 import { resolveWorkerHttpUrl } from '@/shared/utils/resolveWorkerHttpUrl';
+import { normalizeRemoteReaderTuning } from '@/shared/utils/datasetSources';
 import type { LoadProgress } from "./types";
 import type { TransportDiagnostics, WorkerTransportConfig } from "./transport";
 import { SharedPayloadRing } from "./sharedPayloadRing";
@@ -27,7 +29,9 @@ import type { Range } from '@/shared/utils/ranges';
 import { compactTimeRanges, inferProgressTimeRangeCompaction } from '@/shared/utils/timeRanges';
 import { workerPerf } from './workerPerf';
 import { DataQualityScanController } from './dataQualityScanController';
+import { trackInitProgress } from './throttledInitProgress';
 import {
+  getPlayableTimeRangeAt,
   getPlayableTimeRanges,
   isByteRangeCovered,
   type ChunkCoverage,
@@ -36,12 +40,12 @@ import {
 type IndexedChunkCoverage = ChunkCoverage;
 
 const MIB = 1024 * 1024;
-const PREFETCH_CACHE_FRACTION = 0.75;
-const MIN_PREFETCH_BYTES = 64 * MIB;
+const PREFETCH_CACHE_FRACTION = 0.5;
+const MIN_PREFETCH_BYTES = 16 * MIB;
 const MAX_PREFETCH_BYTES = 768 * MIB;
 const MAX_PREFETCH_HORIZON_NS = 15_000_000_000n;
 const MAX_CONTIGUOUS_CHUNK_GAP_NS = 750_000_000n;
-const DEFAULT_PREFETCH_AHEAD_MS = 5_000;
+const DEFAULT_PLAYBACK_BUFFER_TARGET_MS = 8_000;
 const PLAYBACK_CURSOR_BUFFER_AHEAD_MS = 1_500;
 
 class McapWorkerImpl implements IWorkerSerializedSourceWorker {
@@ -52,22 +56,30 @@ class McapWorkerImpl implements IWorkerSerializedSourceWorker {
   private _totalBytes = 0;
   private _remoteCacheBytes = 0;
   private _prefetchAnchor?: TimeRange["start"];
+  private _prefetchTargetAheadMs = DEFAULT_PLAYBACK_BUFFER_TARGET_MS;
+  private _prefetchTopicCount = 0;
+  private _prefetchTopicSignature = "";
   private _transportConfig: WorkerTransportConfig = {
     mode: "comlink",
     binaryPayloadThresholdBytes: 64 * 1024,
   };
   private _qualityScan = new DataQualityScanController();
 
-  async initialize(args: Record<string, unknown>): Promise<Initialization> {
+  async initialize(
+    args: Record<string, unknown>,
+    onProgress?: SourceInitProgressCallback,
+  ): Promise<Initialization> {
     workerPerf.configure({
       enabled: args.workerPerf === true,
       label: "mcap",
     });
     console.debug("McapWorker: initialize starting", args);
+    const report = trackInitProgress(onProgress);
     try {
       let rawReadable: IReadable;
       const url = typeof args.url === 'string' ? args.url : undefined;
       const file = args.file instanceof Blob ? args.file : undefined;
+      report({ phase: "connecting", loadedBytes: 0, totalBytes: 0 });
       if (url) {
         const knownRaw = args.knownTotalBytes;
         const knownTotalBytes =
@@ -80,11 +92,26 @@ class McapWorkerImpl implements IWorkerSerializedSourceWorker {
           resolveWorkerHttpUrl(url),
           knownTotalBytes != null ? { knownTotalBytes } : undefined,
         );
-        this._remoteCacheBytes = resolveRemoteCacheBytes();
+        const remoteReader = normalizeRemoteReaderTuning(args.remoteReader);
+        this._remoteCacheBytes = remoteReader?.cacheSizeInBytes ?? resolveRemoteCacheBytes();
         const cachedReadable = new CachedFilelike({
           fileReader,
           cacheSizeInBytes: this._remoteCacheBytes,
           preferCacheViews: true,
+          ...(remoteReader?.fetchBlockSizeInBytes != undefined
+            ? { fetchBlockSizeInBytes: remoteReader.fetchBlockSizeInBytes }
+            : {}),
+          ...(remoteReader?.maxRequestSizeInBytes != undefined
+            ? { maxRequestSizeInBytes: remoteReader.maxRequestSizeInBytes }
+            : {}),
+          onDownloadProgress: (info) => {
+            report({
+              phase: "downloading",
+              loadedBytes: info.loadedBytes,
+              totalBytes: info.totalBytes,
+              transferredBytes: info.transferredBytes,
+            });
+          },
         });
         this._cachedReadable = cachedReadable;
         rawReadable = {
@@ -131,6 +158,7 @@ class McapWorkerImpl implements IWorkerSerializedSourceWorker {
           decompressHandlers,
         }),
       );
+      report({ phase: "opening" });
       this._source = new McapIndexedIterableSource(reader);
       const init = await workerPerf.timeAsync(
         "initialize.source",
@@ -163,8 +191,6 @@ class McapWorkerImpl implements IWorkerSerializedSourceWorker {
       });
       if (this._cachedReadable) {
         this._totalBytes = await this._cachedReadable.size();
-        this._prefetchAnchor = init.start;
-        this._scheduleTimePrefixPrefetch();
       }
       workerPerf.flushMaybe(true);
       return init;
@@ -181,8 +207,10 @@ class McapWorkerImpl implements IWorkerSerializedSourceWorker {
 
   getMessageCursor(args: MessageIteratorArgs): Promise<IMessageCursor<unknown>> {
     if (!this._source) throw new Error("Not initialized");
-    this._prefetchAnchor = args.startTime;
-    this._scheduleTimePrefixPrefetch();
+    if (args.endTime == undefined && !this._matchesPlaybackPrefetchAnchor(args.startTime, args.topics)) {
+      this._setPlaybackPrefetchAnchor(args.startTime, args.topics, DEFAULT_PLAYBACK_BUFFER_TARGET_MS);
+      this._scheduleTimePrefixPrefetch();
+    }
     const iterator = this._source.messageIterator(args);
     const cursorOptions = {
       ...this._transportConfig,
@@ -194,8 +222,10 @@ class McapWorkerImpl implements IWorkerSerializedSourceWorker {
 
   async getBackfillMessages(args: GetBackfillMessagesArgs): Promise<MessageEvent[]> {
     if (!this._source) throw new Error("Not initialized");
-    this._prefetchAnchor = args.time;
-    this._scheduleTimePrefixPrefetch();
+    if (!this._matchesPlaybackPrefetchAnchor(args.time, args.topics)) {
+      this._setPlaybackPrefetchAnchor(args.time, args.topics, DEFAULT_PLAYBACK_BUFFER_TARGET_MS);
+      this._scheduleTimePrefixPrefetch();
+    }
     return await this._source.getBackfillMessages(args);
   }
 
@@ -205,17 +235,20 @@ class McapWorkerImpl implements IWorkerSerializedSourceWorker {
   }
 
   preparePlaybackBuffer(args: PreparePlaybackBufferArgs): Promise<PlaybackBufferStatus> {
-    if (!this._cachedReadable) {
+    if (!this._cachedReadable || args.topics.length === 0) {
+      if (args.topics.length === 0) {
+        this._setPlaybackPrefetchAnchor(undefined, [], DEFAULT_PLAYBACK_BUFFER_TARGET_MS);
+      }
       return Promise.resolve({ ready: true });
     }
 
-    this._prefetchAnchor = args.time;
-    return Promise.resolve(this._scheduleTimePrefixPrefetch(args.time, args.minAheadMs));
+    this._setPlaybackPrefetchAnchor(args.time, args.topics, args.minAheadMs);
+    return Promise.resolve(this._scheduleTimePrefixPrefetch());
   }
 
   async getLoadProgress(): Promise<LoadProgress> {
     if (this._cachedReadable) {
-      const bufferStatus = this._scheduleTimePrefixPrefetch(this._prefetchAnchor, DEFAULT_PREFETCH_AHEAD_MS);
+      const bufferStatus = this._getPlaybackBufferStatus(this._prefetchAnchor, this._prefetchTargetAheadMs);
       const downloadedByteRanges = this._cachedReadable.getDownloadedRanges();
       const loadedBytes = downloadedByteRanges.reduce((sum, range) => sum + (range.end - range.start), 0);
       const totalBytes = this._totalBytes || (await this._cachedReadable.size());
@@ -286,32 +319,85 @@ class McapWorkerImpl implements IWorkerSerializedSourceWorker {
     return this._qualityScan.start();
   }
 
-  private _scheduleTimePrefixPrefetch(
-    anchor: TimeRange["start"] | undefined = this._prefetchAnchor,
-    minAheadMs = DEFAULT_PREFETCH_AHEAD_MS,
+  private _setPlaybackPrefetchAnchor(
+    anchor: TimeRange["start"] | undefined,
+    topics: readonly string[],
+    targetAheadMs: number,
+  ): void {
+    this._prefetchAnchor = topics.length > 0 ? anchor : undefined;
+    this._prefetchTopicCount = topics.length;
+    this._prefetchTopicSignature = this._playbackTopicSignature(topics);
+    this._prefetchTargetAheadMs =
+      typeof targetAheadMs === "number" && Number.isFinite(targetAheadMs)
+        ? Math.max(1, Math.round(targetAheadMs))
+        : DEFAULT_PLAYBACK_BUFFER_TARGET_MS;
+  }
+
+  private _matchesPlaybackPrefetchAnchor(time: TimeRange["start"], topics: readonly string[]): boolean {
+    return (
+      this._prefetchAnchor != undefined &&
+      toNano(this._prefetchAnchor) === toNano(time) &&
+      this._prefetchTopicSignature === this._playbackTopicSignature(topics)
+    );
+  }
+
+  private _playbackTopicSignature(topics: readonly string[]): string {
+    return Array.from(new Set(topics)).sort().join("\0");
+  }
+
+  private _scheduleTimePrefixPrefetch(): PlaybackBufferStatus {
+    const status = this._getPlaybackBufferStatus(this._prefetchAnchor, this._prefetchTargetAheadMs);
+    if (status.ready || !this._cachedReadable || !this._prefetchAnchor || this._chunkCoverage.length === 0) {
+      return status;
+    }
+
+    const anchorNs = toNano(this._prefetchAnchor);
+    const plan = this._buildPlaybackBufferPlan(anchorNs, this._prefetchTargetAheadMs);
+    if (plan) {
+      const downloadedByteRanges = this._cachedReadable.getDownloadedRanges();
+      if (!isByteRangeCovered(plan.byteRange, downloadedByteRanges)) {
+        this._cachedReadable.prefetch(plan.byteRange.start, plan.byteRange.end - plan.byteRange.start, {
+          replace: true,
+        });
+      }
+    }
+    return status;
+  }
+
+  private _getPlaybackBufferStatus(
+    anchor: TimeRange["start"] | undefined,
+    targetAheadMs: number,
   ): PlaybackBufferStatus {
     if (!this._cachedReadable || !anchor || this._chunkCoverage.length === 0) {
+      this._recordPlaybackBufferGauges(0, targetAheadMs, true);
       return { ready: true };
     }
 
     const anchorNs = toNano(anchor);
-    const plan = this._buildPlaybackBufferPlan(anchorNs, minAheadMs);
-    if (!plan) {
-      return { ready: true };
-    }
-
     const downloadedByteRanges = this._cachedReadable.getDownloadedRanges();
-    const ready = isByteRangeCovered(plan.byteRange, downloadedByteRanges);
-    if (!ready) {
-      this._cachedReadable.prefetch(plan.byteRange.start, plan.byteRange.end - plan.byteRange.start, {
-        replace: true,
-      });
-    }
+    const range = getPlayableTimeRangeAt(
+      this._chunkCoverage,
+      downloadedByteRanges,
+      anchorNs,
+      MAX_CONTIGUOUS_CHUNK_GAP_NS,
+    );
+    const bufferedAheadMs = range
+      ? Math.max(0, Number(toNano(range.end) - anchorNs) / 1_000_000)
+      : 0;
+    const ready = bufferedAheadMs >= targetAheadMs;
+    this._recordPlaybackBufferGauges(bufferedAheadMs, targetAheadMs, ready);
     return {
       ready,
-      bufferedUntil: fromNano(plan.endNs),
-      bufferedAheadMs: Math.max(0, Number(plan.endNs - anchorNs) / 1_000_000),
+      bufferedUntil: range?.end,
+      bufferedAheadMs,
     };
+  }
+
+  private _recordPlaybackBufferGauges(bufferedAheadMs: number, targetAheadMs: number, ready: boolean): void {
+    workerPerf.recordGauge("mcap.playbackBuffer.topics", this._prefetchTopicCount);
+    workerPerf.recordGauge("mcap.playbackBuffer.bufferedAheadMs", bufferedAheadMs);
+    workerPerf.recordGauge("mcap.playbackBuffer.targetAheadMs", targetAheadMs);
+    workerPerf.recordGauge("mcap.playbackBuffer.ready", ready ? 1 : 0);
   }
 
   private _buildPlaybackBufferPlan(

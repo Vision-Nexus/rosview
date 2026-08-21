@@ -1,7 +1,7 @@
 import type { Time } from '@/core/types/ros';
 import type { RawImageDecodeOptions } from './imageColorMode';
 import type { ImageSurfaceStatus } from './imageTypes';
-import type { H264PressureMode } from './h264Backpressure';
+import type { VideoPressureMode } from './videoBackpressure';
 import type { ImageAnnotationsFrame } from './imageAnnotations';
 
 export interface ImageRenderOptions {
@@ -71,6 +71,12 @@ export type ImageRenderWorkerRequest =
       overlay: ImageAnnotationsFrame | null;
     }
   | {
+      type: 'bootstrapVideo';
+      codec: 'h264' | 'h265';
+      frames: ImageWorkerFrameEnvelope[];
+      preserveFrame?: boolean;
+    }
+  | {
       type: 'reset';
       preserveFrame?: boolean;
     }
@@ -79,7 +85,7 @@ export type ImageRenderWorkerRequest =
     };
 
 export interface ImageRenderMetrics {
-  pressureMode: H264PressureMode;
+  pressureMode: VideoPressureMode;
   queueFrames: number;
   queueSpanMs: number;
   decodeMs: number;

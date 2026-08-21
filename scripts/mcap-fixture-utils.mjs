@@ -130,3 +130,60 @@ export async function registerCompressedImageChannel(topic, writer) {
   });
   return channelId;
 }
+
+const COMPRESSED_VIDEO_SCHEMA = `# foxglove_msgs/msg/CompressedVideo
+builtin_interfaces/Time timestamp
+string frame_id
+uint8[] data
+string format
+
+================================================================================
+MSG: builtin_interfaces/Time
+int32 sec
+uint32 nanosec
+`;
+
+/** @type {ReturnType<typeof parseMessageDefinition> | undefined} */
+let compressedVideoDefs;
+/** @type {MessageWriter | undefined} */
+let compressedVideoWriter;
+
+function getCompressedVideoWriter() {
+  if (!compressedVideoWriter) {
+    compressedVideoDefs = parseMessageDefinition(COMPRESSED_VIDEO_SCHEMA, { ros2: true });
+    compressedVideoWriter = new MessageWriter(compressedVideoDefs);
+  }
+  return compressedVideoWriter;
+}
+
+/**
+ * @param {{ sec: number, nsec: number }} timestamp
+ * @param {string} format
+ * @param {Buffer | Uint8Array} data
+ */
+export function encodeCompressedVideoCdr(timestamp, format, data) {
+  return getCompressedVideoWriter().writeMessage({
+    timestamp,
+    frame_id: 'camera',
+    data,
+    format,
+  });
+}
+
+/**
+ * @param {string} topic
+ * @param {Awaited<ReturnType<typeof createIndexedMcapWriter>>['writer']} writer
+ */
+export async function registerCompressedVideoChannel(topic, writer) {
+  const schemaId = await writer.registerSchema({
+    name: 'foxglove_msgs/msg/CompressedVideo',
+    encoding: 'ros2msg',
+    data: new TextEncoder().encode(COMPRESSED_VIDEO_SCHEMA),
+  });
+  return writer.registerChannel({
+    schemaId,
+    topic,
+    messageEncoding: 'cdr',
+    metadata: new Map(),
+  });
+}

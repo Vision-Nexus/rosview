@@ -4,8 +4,15 @@ import type { Readable } from '@/core/types/player';
 import EventEmitter from "eventemitter3";
 
 export type FileStreamEvents = {
-  data: (chunk: Uint8Array) => void;
+  data: (chunk: Uint8Array, offset?: number) => void;
+  progress: (received: number, total: number) => void;
   error: (err: Error) => void;
+};
+
+export type DownloadProgressInfo = {
+  loadedBytes: number;
+  totalBytes: number;
+  transferredBytes: number;
 };
 
 export interface FileStream extends EventEmitter<FileStreamEvents> {
@@ -17,21 +24,40 @@ export interface FileReader {
   fetch(offset: number, length: number): FileStream;
 }
 
-const CACHE_BLOCK_SIZE = 1024 * 1024 * 50; // 50MiB blocks
-const DEFAULT_MAX_REQUEST_SIZE = CACHE_BLOCK_SIZE * 2;
+const CACHE_STORAGE_BLOCK_SIZE = 1024 * 1024;
+const DEFAULT_MAX_REQUEST_SIZE = 8 * 1024 * 1024;
+const DEFAULT_FETCH_BLOCK_SIZE = DEFAULT_MAX_REQUEST_SIZE;
+const MAX_PARALLEL_PREFETCH_CONNECTIONS = 2;
+const PREFETCH_RETRY_DELAY_MS = 500;
+
+/**
+ * Max consecutive fetch failures for the *same* logical block before giving up and rejecting
+ * pending reads. Previously the only give-up condition was "two errors within 100ms of each
+ * other", which never triggers against a server/network that fails slowly-but-persistently
+ * (RTT > 100ms) — that failure mode retried forever. This bound guarantees termination
+ * regardless of error timing.
+ */
+const MAX_CONSECUTIVE_BLOCK_ERRORS = 6;
+
+function isFiniteNonNegativeInteger(value: number): boolean {
+  return Number.isInteger(value) && value >= 0;
+}
 
 export default class CachedFilelike implements Readable {
   #fileReader: FileReader;
   #cacheSizeInBytes: number = Infinity;
   #maxRequestSizeInBytes: number = DEFAULT_MAX_REQUEST_SIZE;
-  #fetchBlockSizeInBytes: number = CACHE_BLOCK_SIZE;
+  #fetchBlockSizeInBytes: number = DEFAULT_FETCH_BLOCK_SIZE;
   #preferCacheViews = false;
   #fileSize?: number;
   #virtualBuffer: VirtualLRUBuffer;
   #closed: boolean = false;
   #keepReconnectingCallback?: (reconnecting: boolean) => void;
+  #onDownloadProgress?: (info: DownloadProgressInfo) => void;
+  #transferredBytes = 0;
 
-  #currentConnection: { stream: FileStream; remainingRange: Range; kind: "read" | "prefetch" } | undefined;
+  #currentReadConnection: { stream: FileStream; range: Range; nextOffset: number } | undefined;
+  #currentPrefetchConnections: { stream: FileStream; range: Range; nextOffset: number }[] = [];
 
   #readRequests: {
     range: Range;
@@ -42,6 +68,8 @@ export default class CachedFilelike implements Readable {
   #prefetchRequests: Range[] = [];
 
   #lastErrorTime?: number;
+  #nextPrefetchAttemptAtMs = 0;
+  #consecutiveBlockErrorCount = 0;
 
   public constructor(options: {
     fileReader: FileReader;
@@ -50,6 +78,7 @@ export default class CachedFilelike implements Readable {
     maxRequestSizeInBytes?: number;
     preferCacheViews?: boolean;
     keepReconnectingCallback?: (reconnecting: boolean) => void;
+    onDownloadProgress?: (info: DownloadProgressInfo) => void;
   }) {
     this.#fileReader = options.fileReader;
     this.#cacheSizeInBytes = options.cacheSizeInBytes ?? this.#cacheSizeInBytes;
@@ -62,10 +91,11 @@ export default class CachedFilelike implements Readable {
     );
     this.#fetchBlockSizeInBytes = Math.max(
       1,
-      Math.min(options.fetchBlockSizeInBytes ?? CACHE_BLOCK_SIZE, this.#maxRequestSizeInBytes),
+      Math.min(options.fetchBlockSizeInBytes ?? DEFAULT_FETCH_BLOCK_SIZE, this.#maxRequestSizeInBytes),
     );
     this.#preferCacheViews = options.preferCacheViews ?? false;
     this.#keepReconnectingCallback = options.keepReconnectingCallback;
+    this.#onDownloadProgress = options.onDownloadProgress;
     this.#virtualBuffer = new VirtualLRUBuffer({ size: 0 });
   }
 
@@ -75,13 +105,14 @@ export default class CachedFilelike implements Readable {
     }
     const { size } = await this.#fileReader.open();
     this.#fileSize = size;
+    const cacheBlockSize = Math.min(CACHE_STORAGE_BLOCK_SIZE, size);
     if (this.#cacheSizeInBytes >= size) {
-      this.#virtualBuffer = new VirtualLRUBuffer({ size, blockSize: CACHE_BLOCK_SIZE });
+      this.#virtualBuffer = new VirtualLRUBuffer({ size, blockSize: cacheBlockSize });
     } else {
       this.#virtualBuffer = new VirtualLRUBuffer({
         size,
-        blockSize: CACHE_BLOCK_SIZE,
-        numberOfBlocks: Math.ceil(this.#cacheSizeInBytes / CACHE_BLOCK_SIZE) + 2,
+        blockSize: cacheBlockSize,
+        numberOfBlocks: Math.ceil(this.#cacheSizeInBytes / cacheBlockSize) + 2,
       });
     }
   }
@@ -107,11 +138,23 @@ export default class CachedFilelike implements Readable {
       return Promise.resolve(new Uint8Array());
     }
 
+    // Fail fast on non-finite / negative / non-integer offsets or lengths (e.g. `NaN` from a
+    // caller doing arithmetic on an un-awaited `Promise`). Without this guard, a `NaN` `end`
+    // silently turns into a `read()` that can never be satisfied — `hasData()` is never true
+    // for a `NaN` bound — while the block-alignment logic keeps computing a plausible-looking,
+    // finite fetch range from the (valid) `start` and re-requesting it forever. See
+    // `bag.worker.ts`'s remote `Filelike.size()` adapter for the real-world case this fixes.
+    if (
+      !isFiniteNonNegativeInteger(offset) ||
+      !isFiniteNonNegativeInteger(length)
+    ) {
+      throw new Error(
+        `CachedFilelike#read invalid input: offset=${offset}, length=${length} (must be finite non-negative integers)`,
+      );
+    }
+
     const range = { start: offset, end: offset + length };
 
-    if (offset < 0 || length < 0) {
-      throw new Error("CachedFilelike#read invalid input");
-    }
     if (length > this.#cacheSizeInBytes) {
       throw new Error(`Requested more data than cache size: ${length} > ${this.#cacheSizeInBytes}`);
     }
@@ -138,11 +181,17 @@ export default class CachedFilelike implements Readable {
     if (length <= 0 || this.#closed) {
       return;
     }
-
-    const range = { start: offset, end: offset + length };
-    if (offset < 0 || length < 0 || length > this.#cacheSizeInBytes) {
+    // Best-effort: silently drop malformed prefetch requests rather than let a `NaN`/negative
+    // bound reach the same range-alignment code path that `read()` guards against above.
+    if (
+      !isFiniteNonNegativeInteger(offset) ||
+      !isFiniteNonNegativeInteger(length) ||
+      length > this.#cacheSizeInBytes
+    ) {
       return;
     }
+
+    const range = { start: offset, end: offset + length };
 
     void this.open()
       .then(async () => {
@@ -151,15 +200,10 @@ export default class CachedFilelike implements Readable {
           return;
         }
         if (options?.replace === true) {
-          const currentPrefetch = this.#currentConnection?.kind === "prefetch" ? this.#currentConnection : undefined;
-          const currentPrefetchMatches =
-            currentPrefetch != undefined &&
-            this.#rangeOverlaps(range, currentPrefetch.remainingRange);
+          // A new playhead plan replaces queued speculation, not an already-started request. The
+          // service worker can cache only completed ranges, so aborting an in-flight prefetch
+          // discards every byte it has received and forces the next seek to redownload it.
           this.#prefetchRequests = [];
-          if (currentPrefetch && !currentPrefetchMatches) {
-            currentPrefetch.stream.destroy();
-            this.#currentConnection = undefined;
-          }
         }
         if (this.#prefetchRequests.some((queued) => queued.start === range.start && queued.end === range.end)) {
           return;
@@ -177,7 +221,14 @@ export default class CachedFilelike implements Readable {
       return;
     }
 
-    this.#readRequests = this.#readRequests.filter(({ range, resolve }) => {
+    this.#readRequests = this.#readRequests.filter(({ range, resolve, reject }) => {
+      // Second line of defense: `read()` already rejects non-finite ranges synchronously, but
+      // reject here too in case a request ever reaches the queue some other way — an
+      // unsatisfiable range must never sit in the queue silently forever.
+      if (!Number.isFinite(range.start) || !Number.isFinite(range.end)) {
+        reject(new Error(`CachedFilelike: unsatisfiable range [${range.start}, ${range.end})`));
+        return false;
+      }
       if (!this.#virtualBuffer.hasData(range.start, range.end)) {
         return true;
       }
@@ -197,59 +248,57 @@ export default class CachedFilelike implements Readable {
       (range) => !this.#virtualBuffer.hasData(range.start, range.end),
     );
     const firstReadRange = this.#readRequests[0]?.range;
-    if (
-      firstReadRange &&
-      this.#currentConnection?.kind === "prefetch" &&
-      !this.#rangeOverlaps(firstReadRange, this.#currentConnection.remainingRange)
-    ) {
-      this.#currentConnection.stream.destroy();
-      this.#currentConnection = undefined;
-    }
-
-    if (!this.#currentConnection && firstReadRange) {
-      const readFetchRange = this.#getNextFixedFetchRange(firstReadRange, size);
+    if (!this.#currentReadConnection && firstReadRange) {
+      const readFetchRange = this.#getNextFetchRange(firstReadRange, size);
       if (readFetchRange) {
         this.#setConnection(readFetchRange, "read");
-        return;
       }
     }
 
-    if (!this.#currentConnection && this.#readRequests.length === 0) {
+    // A smooth remote stream keeps two disjoint speculative blocks moving behind the playhead.
+    // Active prefetches count as covered, so foreground reads cannot duplicate or abort either one.
+    while (
+      this.#currentPrefetchConnections.length < MAX_PARALLEL_PREFETCH_CONNECTIONS &&
+      Date.now() >= this.#nextPrefetchAttemptAtMs
+    ) {
       const prefetchRange = this.#prefetchRequests[0];
-      if (prefetchRange) {
-        const prefetchFetchRange = this.#getNextFixedFetchRange(prefetchRange, size);
-        if (prefetchFetchRange) {
-          this.#setConnection(prefetchFetchRange, "prefetch");
-          return;
-        }
-      }
+      if (!prefetchRange) break;
+      const prefetchFetchRange = this.#getNextFetchRange(prefetchRange, size);
+      if (!prefetchFetchRange) break;
+      this.#setConnection(prefetchFetchRange, "prefetch");
     }
   }
 
-  #getNextFixedFetchRange(queryRange: Range, fileSize: number): Range | undefined {
+  #getNextFetchRange(queryRange: Range, fileSize: number): Range | undefined {
+    if (!Number.isFinite(queryRange.start) || !Number.isFinite(queryRange.end)) {
+      return undefined;
+    }
     if (queryRange.start >= fileSize) {
       return undefined;
     }
     const bounded = { start: queryRange.start, end: Math.min(queryRange.end, fileSize) };
-    const missing = missingRanges(bounded, this.#coveredOrInFlightRanges())[0];
+    const coveredOrInFlight = this.#coveredOrInFlightRanges();
+    const missing = missingRanges(bounded, coveredOrInFlight)[0];
     if (!missing) {
       return undefined;
     }
-    return this.#alignToFetchBlock(missing, fileSize);
+    // The virtual service worker caches only exact completed ranges. Align requests to the caller's
+    // configured block size so adjacent MCAP index and chunk reads share reusable cache keys.
+    const requestSize = Math.min(this.#fetchBlockSizeInBytes, this.#maxRequestSizeInBytes);
+    const blockStart = Math.floor(missing.start / requestSize) * requestSize;
+    const blockEnd = Math.min(fileSize, blockStart + requestSize);
+    const readAhead = { start: blockStart, end: blockEnd };
+    // A partial existing block must be completed exactly; fetching the whole aligned block would
+    // duplicate retained bytes and defeat the cache's range identity. Keep that completion bounded
+    // to its one configured block rather than letting a large queued plan bypass the transport cap.
+    return coveredOrInFlight.some((range) => this.#rangeOverlaps(range, readAhead))
+      ? { start: missing.start, end: Math.min(missing.end, blockEnd) }
+      : readAhead;
   }
-
-  #alignToFetchBlock(range: Range, fileSize: number): Range {
-    const blockSize = this.#fetchBlockSizeInBytes;
-    const start = Math.floor(range.start / blockSize) * blockSize;
-    const end = Math.min(fileSize, start + blockSize);
-    return { start, end };
-  }
-
   #coveredOrInFlightRanges(): Range[] {
     const ranges = this.#virtualBuffer.getRangesWithData().map((range) => ({ ...range }));
-    if (this.#currentConnection) {
-      ranges.push({ ...this.#currentConnection.remainingRange });
-    }
+    if (this.#currentReadConnection) ranges.push({ ...this.#currentReadConnection.range });
+    ranges.push(...this.#currentPrefetchConnections.map((connection) => ({ ...connection.range })));
     return this.#mergeRanges(ranges);
   }
 
@@ -274,49 +323,93 @@ export default class CachedFilelike implements Readable {
   }
 
   #setConnection(range: Range, kind: "read" | "prefetch"): void {
-    if (this.#currentConnection) {
-      const currentConnection = this.#currentConnection;
-      currentConnection.stream.destroy();
+    if (
+      (kind === "read" && this.#currentReadConnection) ||
+      (kind === "prefetch" && this.#currentPrefetchConnections.length >= MAX_PARALLEL_PREFETCH_CONNECTIONS)
+    ) {
+      return;
     }
 
     const stream = this.#fileReader.fetch(range.start, range.end - range.start);
-    this.#currentConnection = { stream, remainingRange: range, kind };
+    const connection = { stream, range, nextOffset: range.start };
+    if (kind === "read") this.#currentReadConnection = connection;
+    else this.#currentPrefetchConnections.push(connection);
+    const requestTotal = range.end - range.start;
+    let requestReceived = 0;
+
+    stream.on("progress", (received: number, total: number) => {
+      const active =
+        kind === "read"
+          ? this.#currentReadConnection === connection
+          : this.#currentPrefetchConnections.includes(connection);
+      if (!active) return;
+      const safeReceived = Math.max(0, received);
+      const delta = safeReceived - requestReceived;
+      if (delta > 0) {
+        this.#transferredBytes += delta;
+        requestReceived = safeReceived;
+      }
+      this.#reportDownloadProgress(safeReceived, total > 0 ? total : requestTotal);
+    });
 
     stream.on("error", (error: Error) => {
+      const active =
+        kind === "read"
+          ? this.#currentReadConnection === connection
+          : this.#currentPrefetchConnections.includes(connection);
+      if (!active) return;
       console.error(`Connection error @ ${range.start}-${range.end}:`, error);
-      const currentConnection = this.#currentConnection;
-      if (!currentConnection || stream !== currentConnection.stream) {
+      if (kind === "read") this.#currentReadConnection = undefined;
+      else this.#currentPrefetchConnections = this.#currentPrefetchConnections.filter((item) => item !== connection);
+      if (kind === "prefetch") {
+        this.#nextPrefetchAttemptAtMs = Date.now() + PREFETCH_RETRY_DELAY_MS;
+        this.#prefetchRequests = this.#prefetchRequests.filter(
+          (queued) => !this.#rangeOverlaps(queued, range),
+        );
+        this.#updateState();
         return;
       }
 
-      if (this.#keepReconnectingCallback) {
-        if (this.#lastErrorTime == undefined) {
-          this.#keepReconnectingCallback(true);
+      // Bounded regardless of `keepReconnectingCallback` and independent of the "two errors
+      // within 100ms" heuristic below, which never trips against a slowly-but-persistently
+      // failing server/network (RTT > 100ms) — that combination used to retry forever.
+      this.#consecutiveBlockErrorCount += 1;
+      const exhaustedRetryBudget = this.#consecutiveBlockErrorCount >= MAX_CONSECUTIVE_BLOCK_ERRORS;
+      const rapidDoubleFault =
+        !this.#keepReconnectingCallback &&
+        this.#lastErrorTime != undefined &&
+        Date.now() - this.#lastErrorTime < 100;
+
+      if (exhaustedRetryBudget || rapidDoubleFault) {
+        this.#closed = true;
+        const failure = exhaustedRetryBudget
+          ? new Error(
+              `CachedFilelike: giving up on ${range.start}-${range.end} after ${this.#consecutiveBlockErrorCount} consecutive errors: ${error.message}`,
+            )
+          : error;
+        for (const request of this.#readRequests) {
+          request.reject(failure);
         }
-      } else {
-        const lastErrorTime = this.#lastErrorTime;
-        if (lastErrorTime != undefined && Date.now() - lastErrorTime < 100) {
-          this.#closed = true;
-          for (const request of this.#readRequests) {
-            request.reject(error);
-          }
-          return;
-        }
+        return;
+      }
+
+      if (this.#keepReconnectingCallback && this.#lastErrorTime == undefined) {
+        this.#keepReconnectingCallback(true);
       }
 
       this.#lastErrorTime = Date.now();
-      currentConnection.stream.destroy();
-      this.#currentConnection = undefined;
+      stream.destroy();
       this.#updateState();
     });
 
-    let bytesRead = 0;
-    stream.on("data", (chunk: Uint8Array) => {
-      const currentConnection = this.#currentConnection;
-      if (!currentConnection || stream !== currentConnection.stream) {
-        return;
-      }
+    stream.on("data", (chunk: Uint8Array, chunkOffset?: number) => {
+      const activeConnection =
+        kind === "read"
+          ? this.#currentReadConnection === connection
+          : this.#currentPrefetchConnections.includes(connection);
+      if (!activeConnection) return;
 
+      this.#consecutiveBlockErrorCount = 0;
       if (this.#lastErrorTime != undefined) {
         this.#lastErrorTime = undefined;
         if (this.#keepReconnectingCallback) {
@@ -324,21 +417,32 @@ export default class CachedFilelike implements Readable {
         }
       }
 
-      this.#virtualBuffer.copyFrom(chunk, currentConnection.remainingRange.start);
-      bytesRead += chunk.byteLength;
+      const offset = chunkOffset ?? connection.nextOffset;
+      connection.nextOffset = Math.max(connection.nextOffset, offset + chunk.byteLength);
+      this.#virtualBuffer.copyFrom(chunk, offset);
+      if (requestReceived === 0 && chunk.byteLength > 0) {
+        this.#transferredBytes += chunk.byteLength;
+        this.#reportDownloadProgress(connection.nextOffset - range.start, requestTotal);
+      }
 
       if (this.#virtualBuffer.hasData(range.start, range.end)) {
         stream.destroy();
-        this.#currentConnection = undefined;
-      } else {
-        this.#currentConnection = {
-          stream,
-          remainingRange: { start: range.start + bytesRead, end: range.end },
-          kind,
-        };
+        if (kind === "read") this.#currentReadConnection = undefined;
+        else {
+          this.#currentPrefetchConnections = this.#currentPrefetchConnections.filter((item) => item !== connection);
+          this.#nextPrefetchAttemptAtMs = 0;
+        }
       }
 
       this.#updateState();
+    });
+  }
+
+  #reportDownloadProgress(loadedBytes: number, totalBytes: number): void {
+    this.#onDownloadProgress?.({
+      loadedBytes,
+      totalBytes,
+      transferredBytes: this.#transferredBytes,
     });
   }
 }

@@ -98,15 +98,14 @@ export class MessageCursor implements IMessageCursor<unknown> {
     }
     const first = this._takeNextQueuedMessage();
     if (!first) {
-      workerPerf.recordGauge("cursor.queue.messages", this._queue.length);
-      workerPerf.recordGauge("cursor.queue.mb", this._queueBytes / (1024 * 1024));
-      workerPerf.recordGauge("cursor.queue.durationMs", this._queueDurationMs());
+      this._recordQueueGauges();
       workerPerf.recordGauge("cursor.nextBatch.rawMessages", 0);
       workerPerf.recordGauge("cursor.nextBatch.sentMessages", 0);
       return [];
     }
     if (options?.endTime && toNano(first.receiveTime) > toNano(options.endTime)) {
       this._pendingMessage = first;
+      this._recordQueueGauges();
       workerPerf.recordGauge("cursor.nextBatch.rawMessages", 0);
       workerPerf.recordGauge("cursor.nextBatch.sentMessages", 0);
       return [];
@@ -129,9 +128,7 @@ export class MessageCursor implements IMessageCursor<unknown> {
     }
 
     const coalesced = this._coalesceLatestOnlyTopics(messages);
-    workerPerf.recordGauge("cursor.queue.messages", this._queue.length);
-    workerPerf.recordGauge("cursor.queue.mb", this._queueBytes / (1024 * 1024));
-    workerPerf.recordGauge("cursor.queue.durationMs", this._queueDurationMs());
+    this._recordQueueGauges();
     workerPerf.recordGauge("cursor.nextBatch.rawMessages", messages.length);
     workerPerf.recordGauge("cursor.nextBatch.sentMessages", coalesced.length);
     const transferred = this._transferBatch(coalesced);
@@ -153,11 +150,8 @@ export class MessageCursor implements IMessageCursor<unknown> {
       let sliceStart = performance.now();
       let sliceMessages = 0;
       while (!this._closed && !this._done) {
-        if (
-          this._queue.length >= MessageCursor.DEFAULT_MAX_BUFFER_MESSAGES ||
-          this._queueBytes >= MessageCursor.DEFAULT_MAX_BUFFER_BYTES ||
-          this._isPastBufferDurationLimit()
-        ) {
+        if (this._isAtBufferCapacity()) {
+          this._recordQueueGauges();
           await this._waitForCapacity();
           continue;
         }
@@ -181,9 +175,7 @@ export class MessageCursor implements IMessageCursor<unknown> {
           elapsedMs >= MessageCursor.MAX_PUMP_SLICE_WALL_MS
         ) {
           workerPerf.record("cursor.pump.slice", elapsedMs);
-          workerPerf.recordGauge("cursor.queue.messages", this._queue.length);
-          workerPerf.recordGauge("cursor.queue.mb", this._queueBytes / (1024 * 1024));
-          workerPerf.recordGauge("cursor.queue.durationMs", this._queueDurationMs());
+          this._recordQueueGauges();
           await yieldToEventLoop();
           sliceStart = performance.now();
           sliceMessages = 0;
@@ -239,12 +231,7 @@ export class MessageCursor implements IMessageCursor<unknown> {
   }
 
   private async _waitForCapacity(): Promise<void> {
-    if (
-      this._closed ||
-      (this._queue.length < MessageCursor.DEFAULT_MAX_BUFFER_MESSAGES &&
-        this._queueBytes < MessageCursor.DEFAULT_MAX_BUFFER_BYTES &&
-        !this._isPastBufferDurationLimit())
-    ) {
+    if (this._closed || !this._isAtBufferCapacity()) {
       return;
     }
     await new Promise<void>((resolve) => {
@@ -266,6 +253,24 @@ export class MessageCursor implements IMessageCursor<unknown> {
     for (const waiter of waiters) {
       waiter();
     }
+  }
+
+  private _isAtBufferCapacity(): boolean {
+    return (
+      this._queue.length >= MessageCursor.DEFAULT_MAX_BUFFER_MESSAGES ||
+      this._queueBytes >= MessageCursor.DEFAULT_MAX_BUFFER_BYTES ||
+      this._isPastBufferDurationLimit()
+    );
+  }
+
+  private _recordQueueGauges(): void {
+    workerPerf.recordGauge("cursor.queue.messages", this._queue.length);
+    workerPerf.recordGauge("cursor.queue.mb", this._queueBytes / (1024 * 1024));
+    workerPerf.recordGauge("cursor.queue.durationMs", this._queueDurationMs());
+    workerPerf.recordGauge("cursor.queue.maxMessages", MessageCursor.DEFAULT_MAX_BUFFER_MESSAGES);
+    workerPerf.recordGauge("cursor.queue.maxMb", MessageCursor.DEFAULT_MAX_BUFFER_BYTES / (1024 * 1024));
+    workerPerf.recordGauge("cursor.queue.maxDurationMs", this._maxBufferDurationMs ?? 0);
+    workerPerf.recordGauge("cursor.queue.atCapacity", this._isAtBufferCapacity() ? 1 : 0);
   }
 
   private _transferMessage(message: MessageEvent): IteratorResult<MessageEvent> {

@@ -14,10 +14,11 @@ import type {
 } from './core/imageWorkerProtocol';
 import {
   IMAGE_PANEL_TOPIC_INCLUDES,
+  topicNeedsOrderedVideoFrames,
   type ImageSurfaceStatus,
 } from './core/imageTypes';
-import { repairH264Seek } from './core/h264SeekRepair';
-import { isH264MessageEvent, toWorkerFrame } from './core/messageFrameAdapter';
+import { executeVideoBootstrap } from './core/videoSeekRepair';
+import { isVideoMessageEvent, toWorkerFrame, videoCodecForMessageEvent } from './core/messageFrameAdapter';
 import { applyDepthTopicPreset } from './core/depthColorDefaults';
 import { parseImageAnnotations } from './core/imageAnnotations';
 import type { ImageConfig } from './defaults';
@@ -81,13 +82,20 @@ export const ImagePanel: React.FC<ImagePanelProps> = (props) => {
   const lastPlaybackTimeNsRef = useRef<bigint | null>(null);
   const seekRepairGenerationRef = useRef(0);
   const lastUiStatusRef = useRef<ImageSurfaceStatus>({ phase: 'idle' });
-  const h264ModeRef = useRef(false);
+  const videoSeekRepairAbortRef = useRef<AbortController | null>(null);
+  const videoOrderedModeRef = useRef(false);
+  const videoBootstrapInFlightRef = useRef(false);
+  const videoBootstrapGenerationRef = useRef(0);
+  const videoBufferedLiveRef = useRef<RosMessageEvent[]>([]);
+  const consumerModeRef = useRef<'latest' | 'all'>('latest');
   const [status, setStatus] = useState<ImageSurfaceStatus>({ phase: 'idle' });
   const [metrics, setMetrics] = useState<ImageRenderMetrics | null>(null);
-  const mainConsumerId = `${panelId}:image-main`;
-  const h264ConsumerId = `${panelId}:image-main-h264`;
+  const imageConsumerId = `${panelId}:image-main`;
   const annotationConsumerId = `${panelId}:image-annotations`;
   const selectedAnnotationTopic = annotationVisible ? annotationTopic.trim() : '';
+  const topicSchema = useMessagePipeline((state) =>
+    state.playerState.activeData?.topics.find((entry) => entry.name === topic)?.type ?? '',
+  );
 
   // Worker lifecycle: init on mount, dispose on unmount
   useEffect(() => {
@@ -204,8 +212,8 @@ export const ImagePanel: React.FC<ImagePanelProps> = (props) => {
   }, [formatMessage]);
 
   // High-frequency image frames bypass messageBus. Still images/raw frames use
-  // latest-only; H.264 switches to an ordered lane after the first keyframe-like
-  // sample so delta frames are not dropped.
+  // latest-only; ordered video codecs use mode=all from registration and bootstrap
+  // the nearest decodable GOP before accepting live delta frames.
   useEffect(() => {
     if (!topic) {
       return;
@@ -214,51 +222,168 @@ export const ImagePanel: React.FC<ImagePanelProps> = (props) => {
     if (!worker) {
       return;
     }
-    h264ModeRef.current = false;
+
+    videoOrderedModeRef.current = false;
+    videoBootstrapInFlightRef.current = false;
+    videoBootstrapGenerationRef.current += 1;
+    videoBufferedLiveRef.current = [];
+    consumerModeRef.current = 'latest';
     setMetrics(null);
     worker.postMessage({ type: 'reset' } satisfies ImageRenderWorkerRequest);
-    player.registerHighFrequencyConsumer(mainConsumerId, {
-      topic,
-      lane: 'video',
-      mode: 'latest',
-      onLatestMessage: (message) => {
-        if (isH264MessageEvent(message)) {
-          if (h264ModeRef.current) {
-            return;
-          }
-          h264ModeRef.current = true;
-          player.registerHighFrequencyConsumer(h264ConsumerId, {
-            topic,
-            lane: 'video',
-            mode: 'all',
-            onMessageBatch: (messages) => {
-              for (const event of messages) {
-                if (isH264MessageEvent(event)) {
-                  postImageFrame(worker, event);
-                }
-              }
-            },
-          });
+
+    const initialOrdered = topicNeedsOrderedVideoFrames(topicSchema);
+    if (initialOrdered) {
+      videoOrderedModeRef.current = true;
+      consumerModeRef.current = 'all';
+    }
+
+    const handleVideoFrame = (event: RosMessageEvent) => {
+      if (videoBootstrapInFlightRef.current) {
+        videoBufferedLiveRef.current.push(event);
+        return;
+      }
+      postImageFrame(worker, event);
+    };
+
+    const dispatchHighFrequencyBatch = (messages: RosMessageEvent[]) => {
+      for (const event of messages) {
+        if (isVideoMessageEvent(event)) {
+          handleVideoFrame(event);
+        } else {
+          postImageFrame(worker, event);
         }
-        postImageFrame(worker, message);
-      },
-      onMessageBatch: (messages) => {
-        if (h264ModeRef.current) {
+      }
+    };
+
+    const runBootstrap = async (
+      targetTime: ReturnType<Player['getCurrentTime']>,
+      preserveFrame: boolean,
+    ) => {
+      if (!targetTime) {
+        return false;
+      }
+      const generation = videoBootstrapGenerationRef.current;
+      videoBootstrapInFlightRef.current = true;
+      videoSeekRepairAbortRef.current?.abort();
+      const controller = new AbortController();
+      videoSeekRepairAbortRef.current = controller;
+
+      try {
+        const success = await executeVideoBootstrap({
+          player,
+          worker,
+          topic,
+          targetTime,
+          codec: videoBufferedLiveRef.current.map(videoCodecForMessageEvent).find(Boolean) ?? undefined,
+          liveEvents: videoBufferedLiveRef.current,
+          signal: controller.signal,
+          preserveFrame,
+        });
+        if (controller.signal.aborted || generation !== videoBootstrapGenerationRef.current) {
+          return false;
+        }
+        if (success) {
+          videoBufferedLiveRef.current = [];
+        }
+        return success;
+      } finally {
+        if (generation === videoBootstrapGenerationRef.current) {
+          videoBootstrapInFlightRef.current = false;
+        }
+        if (videoSeekRepairAbortRef.current === controller) {
+          videoSeekRepairAbortRef.current = null;
+        }
+      }
+    };
+
+    const activateVideoOrderedMode = async (triggerMessage?: RosMessageEvent) => {
+      if (videoOrderedModeRef.current) {
+        if (triggerMessage) {
+          handleVideoFrame(triggerMessage);
+        }
+        return;
+      }
+
+      videoOrderedModeRef.current = true;
+      if (triggerMessage) {
+        videoBufferedLiveRef.current.push(triggerMessage);
+      }
+
+      if (consumerModeRef.current !== 'all') {
+        consumerModeRef.current = 'all';
+        player.unregisterHighFrequencyConsumer(imageConsumerId);
+        player.registerHighFrequencyConsumer(imageConsumerId, {
+          topic,
+          lane: 'video',
+          mode: 'all',
+          onMessageBatch: dispatchHighFrequencyBatch,
+        });
+      }
+
+      const currentTime = player.getCurrentTime();
+      if (currentTime) {
+        await runBootstrap(currentTime, false);
+      }
+    };
+
+    const handleMessage = (message: RosMessageEvent) => {
+      if (isVideoMessageEvent(message)) {
+        if (!videoOrderedModeRef.current) {
+          void activateVideoOrderedMode(message);
           return;
         }
-        const latest = messages.at(-1);
-        if (latest) {
-          postImageFrame(worker, latest);
-        }
-      },
-    });
+        handleVideoFrame(message);
+        return;
+      }
+      postImageFrame(worker, message);
+    };
+
+    if (consumerModeRef.current === 'all') {
+      player.registerHighFrequencyConsumer(imageConsumerId, {
+        topic,
+        lane: 'video',
+        mode: 'all',
+        onMessageBatch: dispatchHighFrequencyBatch,
+      });
+      const currentTime = player.getCurrentTime();
+      if (currentTime) {
+        void runBootstrap(currentTime, false);
+      }
+    } else {
+      player.registerHighFrequencyConsumer(imageConsumerId, {
+        topic,
+        lane: 'video',
+        mode: 'latest',
+        onLatestMessage: handleMessage,
+        onMessageBatch: (messages) => {
+          if (videoOrderedModeRef.current) {
+            return;
+          }
+          const latest = messages.at(-1);
+          if (latest) {
+            handleMessage(latest);
+          }
+        },
+      });
+    }
 
     return () => {
-      player.unregisterHighFrequencyConsumer(mainConsumerId);
-      player.unregisterHighFrequencyConsumer(h264ConsumerId);
+      videoBootstrapGenerationRef.current += 1;
+      videoSeekRepairAbortRef.current?.abort();
+      videoSeekRepairAbortRef.current = null;
+      videoBufferedLiveRef.current = [];
+      videoBootstrapInFlightRef.current = false;
+      player.unregisterHighFrequencyConsumer(imageConsumerId);
       worker.postMessage({ type: 'reset' } satisfies ImageRenderWorkerRequest);
     };
-  }, [player, mainConsumerId, h264ConsumerId, topic]);
+  }, [imageConsumerId, player, topic, topicSchema]);
+
+  useEffect(() => {
+    return () => {
+      videoSeekRepairAbortRef.current?.abort();
+      videoSeekRepairAbortRef.current = null;
+    };
+  }, [player, topic]);
 
   // Keep annotation delivery on the video lane. The worker selects the
   // closest publish-time match before drawing over each image frame.
@@ -304,13 +429,43 @@ export const ImagePanel: React.FC<ImagePanelProps> = (props) => {
       if (previousNs != null && nowNs + 5_000_000n < previousNs) {
         const repairGeneration = seekRepairGenerationRef.current;
         const worker = workerRef.current;
-        const stillImageTopic = worker && topic && !h264ModeRef.current ? topic : null;
-        if (worker && topic && h264ModeRef.current) {
-          worker.postMessage({
-            type: 'reset',
-            preserveFrame: true,
-          } satisfies ImageRenderWorkerRequest);
-          void repairH264Seek(player, worker, topic, time);
+        const stillImageTopic = worker && topic && !videoOrderedModeRef.current ? topic : null;
+        videoSeekRepairAbortRef.current?.abort();
+        videoSeekRepairAbortRef.current = null;
+        if (worker && topic && videoOrderedModeRef.current) {
+          videoBootstrapInFlightRef.current = true;
+          videoBufferedLiveRef.current = [];
+          const generation = videoBootstrapGenerationRef.current;
+          const controller = new AbortController();
+          videoSeekRepairAbortRef.current = controller;
+          void (async () => {
+            try {
+              const success = await executeVideoBootstrap({
+                player,
+                worker,
+                topic,
+                targetTime: time,
+                codec: videoBufferedLiveRef.current.map(videoCodecForMessageEvent).find(Boolean) ?? undefined,
+                liveEvents: videoBufferedLiveRef.current,
+                signal: controller.signal,
+                preserveFrame: true,
+              });
+              if (
+                success &&
+                !controller.signal.aborted &&
+                generation === videoBootstrapGenerationRef.current
+              ) {
+                videoBufferedLiveRef.current = [];
+              }
+            } finally {
+              if (generation === videoBootstrapGenerationRef.current) {
+                videoBootstrapInFlightRef.current = false;
+              }
+              if (videoSeekRepairAbortRef.current === controller) {
+                videoSeekRepairAbortRef.current = null;
+              }
+            }
+          })();
         } else {
           worker?.postMessage({ type: 'reset' } satisfies ImageRenderWorkerRequest);
         }
@@ -385,13 +540,14 @@ export const ImagePanel: React.FC<ImagePanelProps> = (props) => {
       className="flex flex-col h-full overflow-hidden relative"
       style={{ background: backgroundColor }}
       data-testid="image-panel"
-      data-h264-pressure={metrics?.pressureMode}
-      data-h264-queue-frames={metrics?.queueFrames}
-      data-h264-dropped-frames={metrics?.droppedFrames}
-      data-h264-decode-queue={metrics?.decodeQueueSize}
-      data-h264-media-lag-ms={metrics?.mediaLagMs}
-      data-h264-resync-count={metrics?.resyncCount}
-      data-h264-rendered-frames={metrics?.renderedFrames}
+      data-video-codec={metrics?.codec}
+      data-video-pressure={metrics?.pressureMode}
+      data-video-queue-frames={metrics?.queueFrames}
+      data-video-dropped-frames={metrics?.droppedFrames}
+      data-video-decode-queue={metrics?.decodeQueueSize}
+      data-video-media-lag-ms={metrics?.mediaLagMs}
+      data-video-resync-count={metrics?.resyncCount}
+      data-video-rendered-frames={metrics?.renderedFrames}
     >
       <PanelTopicBar className="border-zinc-800 bg-zinc-950">
         <TopicQuickPicker

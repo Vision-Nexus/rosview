@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   createDatasetGroupId,
   datasetGroupKey,
+  datasetItemIdentity,
+  datasetItemsFromListItems,
   dedupeDatasetItems,
   fileDatasetId,
   groupDatasets,
@@ -208,6 +210,63 @@ describe('fileDatasetId', () => {
     const c = makeFile('a.mcap', 20);
     expect(fileDatasetId(a)).not.toBe(fileDatasetId(b));
     expect(fileDatasetId(a)).not.toBe(fileDatasetId(c));
+  });
+});
+
+describe('remote source identity', () => {
+  it('keeps the dataset identity stable across renewable URL transport changes', () => {
+    const first = datasetItemsFromListItems([
+      {
+        url: 'https://storage.example/clip.mcap?Expires=100&Signature=first',
+        sourceId: 'object:clip:7:hash:1024',
+      },
+    ])[0];
+    const renewed = datasetItemsFromListItems([
+      {
+        url: 'https://storage.example/clip.mcap?Expires=200&Signature=second',
+        sourceId: 'object:clip:7:hash:1024',
+      },
+    ])[0];
+
+    expect(datasetItemIdentity(renewed)).toBe(datasetItemIdentity(first));
+    expect(datasetGroupKey(renewed)).toBe(datasetGroupKey(first));
+    expect(dedupeDatasetItems([first, renewed])).toEqual([first]);
+  });
+
+  it('changes dataset identity when the immutable source changes', () => {
+    const first = datasetItemsFromListItems([
+      { url: 'https://storage.example/clip.mcap?Expires=100', sourceId: 'object:clip:7:hash:1024' },
+    ])[0];
+    const replacement = datasetItemsFromListItems([
+      { url: 'https://storage.example/clip.mcap?Expires=200', sourceId: 'object:clip:8:hash:1024' },
+    ])[0];
+
+    expect(datasetItemIdentity(replacement)).not.toBe(datasetItemIdentity(first));
+    expect(datasetGroupKey(replacement)).not.toBe(datasetGroupKey(first));
+  });
+
+  it('preserves legacy URL ids when no sourceId is supplied', () => {
+    const [legacy] = datasetItemsFromListItems([{ url: 'https://storage.example/clip.mcap' }]);
+    expect(legacy.id).toBe('url:https://storage.example/clip.mcap:0');
+    expect(datasetItemIdentity(legacy)).toBe(legacy.id);
+  });
+
+  it('dedupes legacy manifest URLs against direct URL props', () => {
+    const url = 'https://storage.example/clip.mcap';
+    const items = normalizeRosViewSources({ urls: [url], fileManifest: [{ url }] });
+    expect(items).toHaveLength(1);
+    expect(items[0].id).toBe(`url:${url}`);
+  });
+
+  it('dedupes renewed manifest entries by sourceId rather than URL', () => {
+    const items = normalizeRosViewSources({
+      fileManifest: [
+        { url: 'https://storage.example/clip.mcap?Expires=100', sourceId: 'object:clip:7:hash:1024' },
+        { url: 'https://storage.example/clip.mcap?Expires=200', sourceId: 'object:clip:7:hash:1024' },
+      ],
+    });
+    expect(items).toHaveLength(1);
+    expect(items[0].url).toContain('Expires=100');
   });
 });
 

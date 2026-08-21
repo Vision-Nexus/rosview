@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { MessageEvent as RosMessageEvent } from '@/core/types/ros';
-import { isH264MessageEvent, toWorkerFrame } from './messageFrameAdapter';
+import { isVideoMessageEvent, toWorkerFrame, videoCodecForMessageEvent } from './messageFrameAdapter';
 
 const receiveTime = { sec: 10, nsec: 0 };
 const publishTime = { sec: 9, nsec: 250 };
@@ -53,11 +53,13 @@ describe('messageFrameAdapter', () => {
     expect(Array.from(fromImage!.frame.data)).toEqual(Array.from(fromVideo!.frame.data));
   });
 
-  it('detects h264 for both CompressedImage and CompressedVideo', () => {
+  it('detects both supported ordered video codecs', () => {
     const payload = new Uint8Array([1]);
-    expect(isH264MessageEvent(makeCompressedImageEvent(payload))).toBe(true);
-    expect(isH264MessageEvent(makeCompressedVideoEvent(payload))).toBe(true);
-    expect(isH264MessageEvent(makeCompressedVideoEvent(payload, 'vp9'))).toBe(false);
+    expect(isVideoMessageEvent(makeCompressedImageEvent(payload))).toBe(true);
+    expect(videoCodecForMessageEvent(makeCompressedVideoEvent(payload))).toBe('h264');
+    expect(videoCodecForMessageEvent(makeCompressedVideoEvent(payload, 'h265'))).toBe('h265');
+    expect(videoCodecForMessageEvent(makeCompressedVideoEvent(payload, 'hevc'))).toBe('h265');
+    expect(isVideoMessageEvent(makeCompressedVideoEvent(payload, 'vp9'))).toBe(false);
   });
 
   it('keeps borrowed message payloads intact by default', () => {

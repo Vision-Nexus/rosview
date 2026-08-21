@@ -24,6 +24,9 @@ export interface Readable {
 
 export type PlayerPresence = 'preinit' | 'initializing' | 'ready' | 'closed';
 
+/** Worker-reported phase while a remote (or large local) source is opening. */
+export type SourceInitPhase = 'connecting' | 'downloading' | 'opening';
+
 export interface PlayerState {
   presence: PlayerPresence;
   progress: {
@@ -33,6 +36,12 @@ export interface PlayerState {
     downloadedByteRanges?: Range[];
     /** Total source bytes for byte-range diagnostics. */
     totalBytes?: number;
+    /** Bytes received in the current HTTP range (or full-file download). */
+    loadedBytes?: number;
+    /** Session-cumulative HTTP bytes transferred while opening. */
+    transferredBytes?: number;
+    /** Coarse initialize phase for the loading overlay. */
+    initPhase?: SourceInitPhase;
     /** Parsed/playable time ranges rendered on the playback track. */
     parsedMessageRanges?: TimeRange[];
     /** Current worker transport mode. */
@@ -65,6 +74,14 @@ export interface PlayerState {
     buffering?: boolean;
     /** Estimated continuous local buffer ahead of the current playback time. */
     bufferedAheadMs?: number;
+    /** Decoded-message look-ahead beyond the current playhead. */
+    prefetchBufferedAheadMs?: number;
+    /** Decoded-message target look-ahead for the current playback speed. */
+    prefetchTargetAheadMs?: number;
+    /** Decoded-message refill threshold for the current playback speed. */
+    prefetchLowWaterMs?: number;
+    /** Whether a decoded-message refill is currently in flight. */
+    prefetchInFlight?: boolean;
     /** Background data quality scan report (session-only). */
     dataQualityReport?: DataQualityReport;
   };

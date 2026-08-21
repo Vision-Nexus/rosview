@@ -1,4 +1,10 @@
+import { videoCodecFromFormat } from './videoCodec';
+
 import type { Time } from '@/core/types/ros';
+import {
+  matchesRosSchema,
+  ROS_MSG_FOXGLOVE_COMPRESSED_VIDEO,
+} from '@/shared/ros/rosMessageTypes';
 
 export interface RawImageMessage {
   encoding: string;
@@ -119,6 +125,13 @@ export function isH264CompressedFrameMessage(message: unknown): boolean {
   return getCompressedKind(getCompressedFrameFormat(message)) === 'h264';
 }
 
+export function isH265CompressedFrameMessage(message: unknown): boolean {
+  if (!isCompressedFrameMessage(message)) {
+    return false;
+  }
+  return getCompressedKind(getCompressedFrameFormat(message)) === 'h265';
+}
+
 export function isRawImageMessage(message: unknown): message is RawImageMessage {
   return Boolean(
     message &&
@@ -140,6 +153,7 @@ export type CompressedImageKind =
   | 'avif'
   | 'bmp'
   | 'h264'
+  | 'h265'
   | null;
 
 export type CompressedDepthCodec = 'png' | 'rvl';
@@ -153,7 +167,7 @@ export interface ParsedCompressedImageFormat {
   bitmapKind: CompressedImageKind;
 }
 
-const COMPRESSED_KIND_RE = /\b(jpeg|jpg|png|webp|gif|avif|bmp|h264)\b/i;
+const COMPRESSED_KIND_RE = /\b(jpeg|jpg|png|webp|gif|avif|bmp)\b/i;
 
 const RAW_ENCODING_TOKENS = new Set([
   '16uc1',
@@ -230,10 +244,8 @@ export function depthEncodingFromFormat(format: string): DepthImageEncoding | nu
  * Handles `rgb8; jpeg compressed bgr8`, `jpeg`, `image/png`, `h264`, etc.
  */
 export function getCompressedKind(format: string): CompressedImageKind {
-  const lower = format.trim().toLowerCase();
-  if (lower === 'h264' || lower.includes('h264')) {
-    return 'h264';
-  }
+  const videoCodec = videoCodecFromFormat(format);
+  if (videoCodec) return videoCodec;
   const m = format.match(COMPRESSED_KIND_RE);
   if (!m || !m[1]) {
     return null;
@@ -244,9 +256,6 @@ export function getCompressedKind(format: string): CompressedImageKind {
   }
   if (token === 'png' || token === 'webp' || token === 'gif' || token === 'avif' || token === 'bmp') {
     return token;
-  }
-  if (token === 'h264') {
-    return 'h264';
   }
   return null;
 }
@@ -344,6 +353,21 @@ export function isRawImageTopicSchema(schemaName: string): boolean {
 
 /** Topic type tokens accepted by the Image panel topic picker. */
 export const IMAGE_PANEL_TOPIC_INCLUDES = ['image', 'CompressedImage', 'CompressedVideo'] as const;
+
+/**
+ * Whether a topic schema carries ordered video chunks (H264/H265/VP9/AV1) that
+ * must not be coalesced to latest-only during playback prefetch.
+ */
+export function topicNeedsOrderedVideoFrames(schemaName: string): boolean {
+  const trimmed = schemaName.trim();
+  if (!trimmed) {
+    return false;
+  }
+  if (matchesRosSchema(trimmed, ROS_MSG_FOXGLOVE_COMPRESSED_VIDEO)) {
+    return true;
+  }
+  return trimmed.toLowerCase().includes('compressedvideo');
+}
 
 export function isImagePanelTopicSchema(schemaName: string): boolean {
   const lower = schemaName.trim().toLowerCase();

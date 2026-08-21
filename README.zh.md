@@ -39,7 +39,7 @@
 - **Worker 解析** — 专用 Web Worker + Comlink；主线程尽量不被阻塞
 - **HTTP Range 流式加载** — 无需整文件下载即可开始回放
 - **多面板布局** — 基于 DockView 的可拖拽、可停靠面板
-- **可视化面板** — 图像（H.264）、3D（点云、URDF、TF）、Plot（uPlot）、关节、地图、音频、RawMessages、TopicGraph、位姿
+- **可视化面板** — 图像（JPEG/PNG/H.264/H.265；HEVC 需要浏览器提供 WebCodecs 支持）、3D（点云、URDF、TF）、Plot（uPlot）、关节、地图、音频、RawMessages、TopicGraph、位姿
 - **Foxglove 布局兼容** — 导入 / 导出 Foxglove Studio 布局
 - **国际化** — English · 简体中文 · 日本語
 - **明 / 暗 / 跟随系统** 主题

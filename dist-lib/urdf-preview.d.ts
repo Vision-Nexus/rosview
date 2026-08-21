@@ -1,4 +1,4 @@
-import { default as default_2 } from 'react';
+import { default as React_2 } from 'react';
 
 export declare function buildLocalMeshUrlMap(files: File[]): Map<string, string>;
 
@@ -44,7 +44,7 @@ export declare function prepareUrdfForPreview(urdfText: string, rotateMeshVisual
 
 export declare function revokeMeshUrlMap(map: Map<string, string>): void;
 
-export declare const UrdfDebugPreview: default_2.FC<UrdfDebugPreviewProps>;
+export declare const UrdfDebugPreview: React_2.FC<UrdfDebugPreviewProps>;
 
 export declare interface UrdfDebugPreviewProps {
     urdfText: string;

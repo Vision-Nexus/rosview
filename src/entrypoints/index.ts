@@ -30,6 +30,13 @@ export { MinimalPlayer } from '../core/players/MinimalPlayer';
 export { createSinglePanelLayout } from '../core/preferences/createSinglePanelLayout';
 
 // ---------------------------------------------------------------------------
+// Independent remote MCAP range reader
+// (stream a full explicit time range without touching viewer playback state)
+// ---------------------------------------------------------------------------
+export { streamRemoteMcapMessages } from '../infra/mcap/streamRemoteMcapMessages';
+export type { StreamRemoteMcapMessagesOptions } from '../infra/mcap/streamRemoteMcapMessages';
+
+// ---------------------------------------------------------------------------
 // Preference types and read/write utilities
 // (for host apps that manage persistence externally)
 // ---------------------------------------------------------------------------
@@ -49,7 +56,7 @@ export {
 // Dataset / source utilities
 // (build custom dataset pickers or remote list manifests)
 // ---------------------------------------------------------------------------
-export type { DatasetItem, FileListItem } from '../shared/utils/datasetSources';
+export type { DatasetItem, FileListItem, RemoteReaderTuning } from '../shared/utils/datasetSources';
 export {
   parseRemoteDatasetListJson,
   datasetItemsFromListItems,

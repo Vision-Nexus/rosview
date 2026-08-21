@@ -1,5 +1,5 @@
-import { default as default_2 } from 'react';
-import { ReactNode } from 'react';
+import { default as React_2 } from 'react';
+import type { ReactNode } from 'react';
 
 /**
  * Build a Foxglove-compatible LayoutData from the current DockView state
@@ -139,10 +139,6 @@ declare interface DataQualitySummaryStats {
     incidentDurationNs?: string;
 }
 
-/**
- * Unified dataset list for ROSView: local files + remote URLs.
- * Merge order: `files` → `file` → `urls` → `url` (files before URLs).
- */
 export declare type DatasetItem = {
     id: string;
     kind: 'file' | 'url';
@@ -150,10 +146,14 @@ export declare type DatasetItem = {
     name: string;
     file?: File;
     url?: string;
+    /** Immutable remote-object identity used for deduplication and session identity. It does not swap an active reader's URL in place. */
+    readonly sourceId?: string;
     /** Optional manifest metadata (remote list or host-injected). */
     sizeBytes?: number;
     durationSec?: number;
     topicCount?: number;
+    /** Optional tuning for this remote source's range reader. */
+    remoteReader?: RemoteReaderTuning;
     /** Files opened together, e.g. from a directory. Some formats need sibling files to initialize correctly. */
     siblingFiles?: File[];
     /**
@@ -222,10 +222,14 @@ export declare function exportDockviewLayout(): FoxgloveLayoutData | null;
 /** One row from host `fileManifest` or remote dataset JSON. */
 export declare type FileListItem = {
     url: string;
+    /** Immutable remote-object identity used for deduplication and session identity. It does not swap an active reader's URL in place. */
+    readonly sourceId?: string;
     name?: string;
     sizeBytes?: number;
     durationSec?: number;
     topicCount?: number;
+    /** Optional tuning for this remote source's range reader. */
+    remoteReader?: RemoteReaderTuning;
 };
 
 /** Foxglove `configById[id]` is an arbitrary JSON object. */
@@ -520,6 +524,12 @@ export declare interface PlayerState {
         downloadedByteRanges?: Range_2[];
         /** Total source bytes for byte-range diagnostics. */
         totalBytes?: number;
+        /** Bytes received in the current HTTP range (or full-file download). */
+        loadedBytes?: number;
+        /** Session-cumulative HTTP bytes transferred while opening. */
+        transferredBytes?: number;
+        /** Coarse initialize phase for the loading overlay. */
+        initPhase?: SourceInitPhase;
         /** Parsed/playable time ranges rendered on the playback track. */
         parsedMessageRanges?: TimeRange[];
         /** Current worker transport mode. */
@@ -552,6 +562,14 @@ export declare interface PlayerState {
         buffering?: boolean;
         /** Estimated continuous local buffer ahead of the current playback time. */
         bufferedAheadMs?: number;
+        /** Decoded-message look-ahead beyond the current playhead. */
+        prefetchBufferedAheadMs?: number;
+        /** Decoded-message target look-ahead for the current playback speed. */
+        prefetchTargetAheadMs?: number;
+        /** Decoded-message refill threshold for the current playback speed. */
+        prefetchLowWaterMs?: number;
+        /** Whether a decoded-message refill is currently in flight. */
+        prefetchInFlight?: boolean;
         /** Background data quality scan report (session-only). */
         dataQualityReport?: DataQualityReport;
     };
@@ -594,6 +612,17 @@ export declare function readPreferences(): RosViewPreferencesV1 | null;
 /** Load the saved Foxglove layout, or `null` when absent/corrupt/legacy. */
 export declare function readSavedDockviewLayout(storageKey?: string): FoxgloveLayoutData | null;
 
+/**
+ * Unified dataset list for ROSView: local files + remote URLs.
+ * Merge order: `files` → `file` → `urls` → `url` (files before URLs).
+ */
+/** Optional per-source limits for remote range readers. Omitted fields retain the reader defaults. */
+export declare type RemoteReaderTuning = Readonly<{
+    cacheSizeInBytes?: number;
+    fetchBlockSizeInBytes?: number;
+    maxRequestSizeInBytes?: number;
+}>;
+
 export declare interface ResolvedEmbedChrome {
     showNavbar: boolean;
     showSidebar: boolean;
@@ -615,7 +644,7 @@ export declare const ROS_VIEW_PREFERENCES_STORAGE_KEY = "ioai.rosview.prefs";
 /** ROS datatype definitions keyed by schema name (payload shape is source-dependent). */
 declare type RosDatatypes = Record<string, unknown>;
 
-export declare const RosViewer: default_2.FC<RosViewerProps>;
+export declare const RosViewer: React_2.FC<RosViewerProps>;
 
 export declare type RosViewerChrome = 'full' | 'minimal' | 'panels-only';
 
@@ -638,7 +667,7 @@ export declare interface RosViewerProps {
     /** CSS class applied to the outermost container element. */
     className?: string;
     /** Inline styles applied to the outermost container element. */
-    style?: default_2.CSSProperties;
+    style?: React_2.CSSProperties;
     onFatalError?: (error: Error) => void;
     /**
      * `'localStorage'`: read/write `ioai.rosview.prefs`. `'off'`: no storage (host owns prefs).
@@ -652,7 +681,10 @@ export declare interface RosViewerProps {
     /** Fired after this component rewrites SPA query state and the host should re-read `window.location.search`. */
     onSpaUrlQuerySync?: () => void;
     /**
-     * Remote dataset manifest: JSON URL or parsed rows.
+     * Remote dataset manifest: JSON URL or parsed rows. Parsed rows may carry an immutable `sourceId`
+     * and remote reader policy. `sourceId` deduplicates an immutable object, but does not hot-swap an
+     * active reader: changing a row URL rebuilds the affected worker-backed source. Hosts that renew
+     * without a rebuild must keep the URL stable and refresh its transport beneath RosViewer.
      * Merged/deduped with `url` / `urls`; fetch errors are logged only and do not block other sources.
      */
     fileManifest?: string | FileListItem[];
@@ -770,12 +802,12 @@ declare type RosViewPreferencesV1 = {
     autoDataQualityScan?: boolean;
 };
 
-export declare const RosViewProvider: default_2.FC<RosViewProviderProps>;
+export declare const RosViewProvider: React_2.FC<RosViewProviderProps>;
 
 export declare interface RosViewProviderProps {
     theme?: 'light' | 'dark' | 'system';
     language?: RosViewLocale;
-    children: default_2.ReactNode;
+    children: React_2.ReactNode;
 }
 
 declare type RosViewThemeContextValue = {
@@ -796,10 +828,44 @@ export declare interface SidebarTabContribution {
     render: (context: RosViewExtensionContext) => ReactNode;
 }
 
+/** Worker-reported phase while a remote (or large local) source is opening. */
+declare type SourceInitPhase = 'connecting' | 'downloading' | 'opening';
+
 declare interface StreamMessagesInTimeRangeArgs extends GetMessagesInTimeRangeArgs {
     maxMessages?: number;
     batchSize?: number;
     batchWallTimeMs?: number;
+}
+
+/**
+ * Open a dedicated MCAP worker and yield decoded messages for `topics` in the
+ * inclusive `[start, end]` receive-time range. The worker, reader, cache, and
+ * cursor are never shared with a visible player and are terminated when this
+ * iterator finishes, is cancelled, or fails.
+ */
+export declare function streamRemoteMcapMessages<T = unknown>(options: StreamRemoteMcapMessagesOptions): AsyncIterableIterator<MessageEvent_2<T>>;
+
+/**
+ * Parameters for an independent, full-range MCAP read.
+ *
+ * `url` is the same-origin virtual MCAP URL registered with the host service
+ * worker. It must remain mapped to one immutable object while this iterator
+ * runs; do not pass a direct signed or leased storage URL.
+ * `totalBytes` is that immutable object's frozen byte size and lets the reader
+ * open it without a separate size probe.
+ */
+export declare interface StreamRemoteMcapMessagesOptions {
+    /** Service-worker virtual URL for one immutable remote MCAP object. */
+    url: string;
+    /** Frozen byte size of the immutable remote MCAP object. */
+    totalBytes: number;
+    topics: readonly string[];
+    /** Inclusive lower receive-time bound. */
+    start: Time;
+    /** Inclusive upper receive-time bound. */
+    end: Time;
+    /** Cancels the reader and terminates its dedicated worker. */
+    signal?: AbortSignal;
 }
 
 export declare interface Subscription {

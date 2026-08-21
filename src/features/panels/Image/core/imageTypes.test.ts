@@ -5,6 +5,7 @@ import {
   isCompressedDepthFormat,
   isCompressedVideoMessage,
   isH264CompressedFrameMessage,
+  isH265CompressedFrameMessage,
   isImagePanelTopicSchema,
   isRawImageTopicSchema,
   normalizeCompressedMime,
@@ -12,6 +13,7 @@ import {
   prepareImageWorkerBytes,
   sniffCompressedMime,
   snapshotBytes,
+  topicNeedsOrderedVideoFrames,
 } from './imageTypes';
 
 describe('snapshotBytes', () => {
@@ -106,6 +108,26 @@ describe('isH264CompressedFrameMessage', () => {
   });
 });
 
+describe('isH265CompressedFrameMessage', () => {
+  it('recognizes h265 and hevc format tokens without admitting unrelated codecs', () => {
+    expect(isH265CompressedFrameMessage({ format: 'h265', data: new Uint8Array([0]) })).toBe(true);
+    expect(isH265CompressedFrameMessage({ format: 'hevc', data: new Uint8Array([0]) })).toBe(true);
+    expect(isH265CompressedFrameMessage({ format: 'h264', data: new Uint8Array([0]) })).toBe(false);
+  });
+});
+
+describe('topicNeedsOrderedVideoFrames', () => {
+  it('returns true for foxglove CompressedVideo schemas', () => {
+    expect(topicNeedsOrderedVideoFrames('foxglove_msgs/msg/CompressedVideo')).toBe(true);
+    expect(topicNeedsOrderedVideoFrames('foxglove_msgs/msg/CompressedVideo [ros2msg]')).toBe(true);
+  });
+
+  it('returns false for JPEG/raw image schemas', () => {
+    expect(topicNeedsOrderedVideoFrames('sensor_msgs/msg/CompressedImage')).toBe(false);
+    expect(topicNeedsOrderedVideoFrames('sensor_msgs/msg/Image')).toBe(false);
+  });
+});
+
 describe('isImagePanelTopicSchema', () => {
   it('accepts raw, compressed image, and compressed video schemas', () => {
     expect(isImagePanelTopicSchema('sensor_msgs/msg/Image')).toBe(true);
@@ -191,6 +213,16 @@ describe('normalizeCompressedMime', () => {
   it('still recognizes explicit codec hints in compound format strings', () => {
     expect(normalizeCompressedMime('rgb8; jpeg compressed bgr8')).toBe('image/jpeg');
     expect(normalizeCompressedMime('image/png')).toBe('image/png');
+  });
+});
+
+describe('getCompressedKind video classification', () => {
+  it('uses the same accepted codec tokens as the ordered video path', () => {
+    expect(getCompressedKind('avc')).toBe('h264');
+    expect(getCompressedKind('video/avc')).toBe('h264');
+    expect(getCompressedKind('h265')).toBe('h265');
+    expect(getCompressedKind('hevc')).toBe('h265');
+    expect(getCompressedKind('vp9')).toBeNull();
   });
 });
 

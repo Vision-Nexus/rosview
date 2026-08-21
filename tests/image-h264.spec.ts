@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { MCAP_H264_URL, requireFixture, MCAP_H264 } from './fixturePaths';
+import { MCAP_H264, MCAP_H264_URL, requireFixture } from './fixturePaths';
 import { openFixtureByUrl } from './helpers/rosview';
 
 test.describe.configure({ timeout: 120_000 });
@@ -34,25 +34,34 @@ test('H.264 CompressedImage decodes without error', async ({ page }) => {
 
   await expect(page.locator('canvas')).not.toHaveCount(0, { timeout: 90_000 });
 
+  const imagePanel = page.getByTestId('image-panel');
+  if (await imagePanel.isVisible().catch(() => false)) {
+    await expect
+      .poll(
+        async () => Number(await imagePanel.getAttribute('data-video-rendered-frames')),
+        { timeout: 5_000 },
+      )
+      .toBeGreaterThan(0);
+  }
+
   const hasDecodeFailure = await page.getByText(/decode failed|could not be decoded/i).count();
   expect(hasDecodeFailure).toBe(0);
 
   const imageStatus = page.getByTestId('image-panel-status');
-  const imagePanel = page.getByTestId('image-panel');
   if (await imagePanel.isVisible().catch(() => false)) {
     await expect(imageStatus).toBeVisible({ timeout: 90_000 });
     await expect(imageStatus).toHaveText(/\d+x\d+/);
 
-    await expect(imagePanel).toHaveAttribute('data-h264-pressure', /^(normal|degraded|recovery)$/, {
+    await expect(imagePanel).toHaveAttribute('data-video-pressure', /^(normal|degraded|recovery)$/, {
       timeout: 90_000,
     });
     const metrics = await imagePanel.evaluate((element) => ({
-      queueFrames: Number(element.getAttribute('data-h264-queue-frames')),
-      droppedFrames: Number(element.getAttribute('data-h264-dropped-frames')),
-      decodeQueueSize: Number(element.getAttribute('data-h264-decode-queue')),
-      mediaLagMs: Number(element.getAttribute('data-h264-media-lag-ms')),
-      resyncCount: Number(element.getAttribute('data-h264-resync-count')),
-      renderedFrames: Number(element.getAttribute('data-h264-rendered-frames')),
+      queueFrames: Number(element.getAttribute('data-video-queue-frames')),
+      droppedFrames: Number(element.getAttribute('data-video-dropped-frames')),
+      decodeQueueSize: Number(element.getAttribute('data-video-decode-queue')),
+      mediaLagMs: Number(element.getAttribute('data-video-media-lag-ms')),
+      resyncCount: Number(element.getAttribute('data-video-resync-count')),
+      renderedFrames: Number(element.getAttribute('data-video-rendered-frames')),
     }));
     expect(Number.isInteger(metrics.queueFrames)).toBe(true);
     expect(metrics.queueFrames).toBeGreaterThanOrEqual(0);
@@ -75,7 +84,7 @@ test('H.264 CompressedImage decodes without error', async ({ page }) => {
     }
     await page.waitForTimeout(1_000);
     await expect(imageStatus).toBeVisible();
-    await expect(imagePanel).toHaveAttribute('data-h264-pressure', /^(normal|degraded|recovery)$/);
+    await expect(imagePanel).toHaveAttribute('data-video-pressure', /^(normal|degraded|recovery)$/);
     expect(await page.getByText(/decode failed|could not be decoded/i).count()).toBe(0);
   }
 });

@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { getPlayableTimeRanges, type ChunkCoverage } from './playableTimeRanges';
+import {
+  getPlayableAheadMs,
+  getPlayableTimeRangeAt,
+  getPlayableTimeRanges,
+  type ChunkCoverage,
+} from './playableTimeRanges';
 import { toNano } from '@/shared/utils/time';
 
 const GAP_NS = 750_000_000n;
@@ -97,5 +102,23 @@ describe('getPlayableTimeRanges', () => {
     expect(ranges).toHaveLength(1);
     expect(toNano(ranges[0].start)).toBe(0n);
     expect(toNano(ranges[0].end)).toBe(2_000_000_000n);
+  });
+});
+
+describe('getPlayableAheadMs', () => {
+  it('counts only the contiguous cached segment containing the playhead', () => {
+    const chunks = [
+      chunk(0, 1, 0, 10),
+      chunk(1, 2, 10, 20),
+      chunk(3, 4, 20, 30),
+    ];
+    const downloaded = [{ start: 0, end: 30 }];
+
+    expect(getPlayableAheadMs(chunks, downloaded, 1_500_000_000n, GAP_NS)).toBe(500);
+    expect(getPlayableAheadMs(chunks, downloaded, 2_500_000_000n, GAP_NS)).toBe(0);
+    expect(getPlayableTimeRangeAt(chunks, downloaded, 1_500_000_000n, GAP_NS)).toEqual({
+      start: { sec: 0, nsec: 0 },
+      end: { sec: 2, nsec: 0 },
+    });
   });
 });
