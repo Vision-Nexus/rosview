@@ -18,6 +18,11 @@ class HttpFileStream extends EventEmitter<FileStreamEvents> implements FileStrea
           }
         },
         this._abortController.signal,
+        (received, total) => {
+          if (!this._destroyed) {
+            this.emit("progress", received, total);
+          }
+        },
       )
       .catch((err: Error) => {
         if (this._destroyed && err.name === "AbortError") {
