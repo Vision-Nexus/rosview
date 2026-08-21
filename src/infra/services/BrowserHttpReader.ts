@@ -1,6 +1,8 @@
+export type HttpReadProgress = (received: number, expected: number) => void;
+
 export interface HttpReader {
   size(): number;
-  read(offset: number, length: number, signal?: AbortSignal): Promise<Uint8Array>;
+  read(offset: number, length: number, signal?: AbortSignal, onProgress?: HttpReadProgress): Promise<Uint8Array>;
 }
 
 export type BrowserHttpReaderOptions = {
@@ -137,7 +139,12 @@ export class BrowserHttpReader implements HttpReader {
     return this._size;
   }
 
-  async read(offset: number, length: number, signal?: AbortSignal): Promise<Uint8Array> {
+  async read(
+    offset: number,
+    length: number,
+    signal?: AbortSignal,
+    onProgress?: HttpReadProgress,
+  ): Promise<Uint8Array> {
     const result = new Uint8Array(length);
     await this.readRanges(
       offset,
@@ -146,6 +153,7 @@ export class BrowserHttpReader implements HttpReader {
         result.set(chunk, chunkOffset - offset);
       },
       signal,
+      onProgress,
     );
     return result;
   }
@@ -160,6 +168,7 @@ export class BrowserHttpReader implements HttpReader {
     length: number,
     onChunk: RangeChunkCallback,
     signal?: AbortSignal,
+    onProgress?: HttpReadProgress,
   ): Promise<void> {
     if (
       !Number.isSafeInteger(offset) ||
@@ -182,9 +191,13 @@ export class BrowserHttpReader implements HttpReader {
         length: Math.min(this._maxRangeRequestSizeInBytes, end - position),
       });
     }
+    const receivedByPart = new Array<number>(parts.length).fill(0);
     await Promise.all(
-      parts.map(async (part) => {
-        const chunk = await this.#readOneRange(part.start, part.length, signal);
+      parts.map(async (part, index) => {
+        const chunk = await this.#readOneRange(part.start, part.length, signal, (received) => {
+          receivedByPart[index] = received;
+          onProgress?.(receivedByPart.reduce((sum, value) => sum + value, 0), length);
+        });
         if (chunk.byteLength !== part.length) {
           throw new Error(`Unexpected response length ${chunk.byteLength} for range length ${part.length}`);
         }
@@ -224,7 +237,12 @@ export class BrowserHttpReader implements HttpReader {
     }
   }
 
-  async #readOneRange(offset: number, length: number, signal?: AbortSignal): Promise<Uint8Array> {
+  async #readOneRange(
+    offset: number,
+    length: number,
+    signal?: AbortSignal,
+    onProgress?: HttpReadProgress,
+  ): Promise<Uint8Array> {
     const end = offset + length - 1;
     const response = await this.#fetchWithRetry(this._url, {
       headers: { Range: `bytes=${offset}-${end}` },
@@ -237,7 +255,9 @@ export class BrowserHttpReader implements HttpReader {
       );
     }
 
-    const buffer = new Uint8Array(await response.arrayBuffer());
+    const headerLength = Number(response.headers.get('Content-Length') ?? '');
+    const expected = Number.isFinite(headerLength) && headerLength > 0 ? headerLength : length;
+    const buffer = await this.#readResponseBody(response, expected, onProgress);
 
     if (response.status === 206) {
       const contentRange = parseContentRange(response.headers.get('Content-Range'));
@@ -264,5 +284,40 @@ export class BrowserHttpReader implements HttpReader {
       return buffer.subarray(0, length);
     }
     throw new Error(`Unexpected response length ${buffer.byteLength} for range length ${length}`);
+  }
+
+  async #readResponseBody(
+    response: Response,
+    expected: number,
+    onProgress?: HttpReadProgress,
+  ): Promise<Uint8Array> {
+    if (!response.body) {
+      const buf = new Uint8Array(await response.arrayBuffer());
+      onProgress?.(buf.byteLength, expected > 0 ? expected : buf.byteLength);
+      return buf;
+    }
+
+    const reader = response.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let received = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      if (value) {
+        chunks.push(value);
+        received += value.byteLength;
+        onProgress?.(received, expected > 0 ? expected : received);
+      }
+    }
+
+    const out = new Uint8Array(received);
+    let offset = 0;
+    for (const chunk of chunks) {
+      out.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return out;
   }
 }

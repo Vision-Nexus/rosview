@@ -1,5 +1,5 @@
-import { default as default_2 } from 'react';
-import { ReactNode } from 'react';
+import { default as React_2 } from 'react';
+import type { ReactNode } from 'react';
 
 /**
  * Build a Foxglove-compatible LayoutData from the current DockView state
@@ -524,6 +524,12 @@ export declare interface PlayerState {
         downloadedByteRanges?: Range_2[];
         /** Total source bytes for byte-range diagnostics. */
         totalBytes?: number;
+        /** Bytes received in the current HTTP range (or full-file download). */
+        loadedBytes?: number;
+        /** Session-cumulative HTTP bytes transferred while opening. */
+        transferredBytes?: number;
+        /** Coarse initialize phase for the loading overlay. */
+        initPhase?: SourceInitPhase;
         /** Parsed/playable time ranges rendered on the playback track. */
         parsedMessageRanges?: TimeRange[];
         /** Current worker transport mode. */
@@ -638,7 +644,7 @@ export declare const ROS_VIEW_PREFERENCES_STORAGE_KEY = "ioai.rosview.prefs";
 /** ROS datatype definitions keyed by schema name (payload shape is source-dependent). */
 declare type RosDatatypes = Record<string, unknown>;
 
-export declare const RosViewer: default_2.FC<RosViewerProps>;
+export declare const RosViewer: React_2.FC<RosViewerProps>;
 
 export declare type RosViewerChrome = 'full' | 'minimal' | 'panels-only';
 
@@ -661,7 +667,7 @@ export declare interface RosViewerProps {
     /** CSS class applied to the outermost container element. */
     className?: string;
     /** Inline styles applied to the outermost container element. */
-    style?: default_2.CSSProperties;
+    style?: React_2.CSSProperties;
     onFatalError?: (error: Error) => void;
     /**
      * `'localStorage'`: read/write `ioai.rosview.prefs`. `'off'`: no storage (host owns prefs).
@@ -796,12 +802,12 @@ declare type RosViewPreferencesV1 = {
     autoDataQualityScan?: boolean;
 };
 
-export declare const RosViewProvider: default_2.FC<RosViewProviderProps>;
+export declare const RosViewProvider: React_2.FC<RosViewProviderProps>;
 
 export declare interface RosViewProviderProps {
     theme?: 'light' | 'dark' | 'system';
     language?: RosViewLocale;
-    children: default_2.ReactNode;
+    children: React_2.ReactNode;
 }
 
 declare type RosViewThemeContextValue = {
@@ -821,6 +827,9 @@ export declare interface SidebarTabContribution {
     order?: number;
     render: (context: RosViewExtensionContext) => ReactNode;
 }
+
+/** Worker-reported phase while a remote (or large local) source is opening. */
+declare type SourceInitPhase = 'connecting' | 'downloading' | 'opening';
 
 declare interface StreamMessagesInTimeRangeArgs extends GetMessagesInTimeRangeArgs {
     maxMessages?: number;

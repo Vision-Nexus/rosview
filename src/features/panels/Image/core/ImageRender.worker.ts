@@ -42,6 +42,7 @@ import {
   selectSynchronizedImageAnnotations,
   type ImageAnnotationsFrame,
 } from './imageAnnotations';
+import { discardStaleAsyncResult } from './asyncEpoch';
 import type {
   ImageRenderOptions,
   ImageRenderMetrics,
@@ -51,6 +52,7 @@ import type {
   ImageWorkerFrameEnvelope,
 } from './imageWorkerProtocol';
 import type { RawImageDecodeOptions } from './imageColorMode';
+import { H264_SEEK_MAX_FRAMES } from './h264SeekRepair';
 
 const DEFAULT_RENDER_OPTIONS: ImageRenderOptions = {
   backgroundColor: '#000000',
@@ -422,6 +424,10 @@ class ImageRenderWorkerRuntime {
         this.#redrawCachedFrameForOverlay();
         return;
 
+      case 'bootstrapH264':
+        this.#bootstrapH264(message.frames, message.preserveFrame === true);
+        return;
+
       case 'reset':
         this.#epoch += 1;
         this.#pendingFrame = null;
@@ -455,11 +461,42 @@ class ImageRenderWorkerRuntime {
     }
   }
 
-  #enqueueFrame(frame: ImageWorkerFrameEnvelope): void {
-    if (!isH264Frame(frame)) {
-      this.#pendingFrame = frame;
+  #bootstrapH264(frames: ImageWorkerFrameEnvelope[], preserveFrame: boolean): void {
+    this.#epoch += 1;
+    this.#pendingFrame = null;
+    this.#pendingH264Frames = [];
+    this.#disposePendingH264Output();
+    this.#haltUntilReset = false;
+    this.#resetH264RuntimeState();
+    this.#decoder.reset();
+    if (!preserveFrame) {
+      this.#disposeCachedBitmap();
+      this.#cachedFrame = null;
+      this.#clearCanvas();
+      this.#emitStatus({ phase: 'idle' });
+    }
+
+    const h264Frames = frames.filter(isH264Frame).slice(0, H264_SEEK_MAX_FRAMES);
+    if (h264Frames.length === 0 || !h264Frames.some((frame) => containsH264IdrNal(frame.data))) {
+      this.#h264WaitingForIdr = true;
+      this.#emitMetricsIfDue(true);
       return;
     }
+
+    for (const frame of h264Frames) {
+      this.#enqueueH264Frame(frame, { applyBackpressure: false });
+    }
+
+    this.#emitMetricsIfDue(true);
+    if (!this.#isProcessing) {
+      void this.#drainLatestFrame();
+    }
+  }
+
+  #enqueueH264Frame(
+    frame: ImageWorkerFrameEnvelope,
+    options: { applyBackpressure?: boolean } = {},
+  ): void {
     this.#h264RecentConfig = updateH264ConfigPackets(this.#h264RecentConfig, frame);
     if (this.#h264WaitingForIdr && !containsH264IdrNal(frame.data)) {
       if (isH264ConfigOnly(frame.data)) {
@@ -470,7 +507,9 @@ class ImageRenderWorkerRuntime {
         return;
       }
       this.#droppedH264Frames += 1;
-      this.#emitMetricsIfDue();
+      if (options.applyBackpressure !== false) {
+        this.#emitMetricsIfDue();
+      }
       return;
     }
     if (containsH264IdrNal(frame.data)) {
@@ -481,9 +520,19 @@ class ImageRenderWorkerRuntime {
       }
     }
     this.#pendingH264Frames.push(frame);
-    this.#updateH264Pressure();
-    this.#trimPendingH264FramesIfNeeded();
-    this.#emitMetricsIfDue();
+    if (options.applyBackpressure !== false) {
+      this.#updateH264Pressure();
+      this.#trimPendingH264FramesIfNeeded();
+      this.#emitMetricsIfDue();
+    }
+  }
+
+  #enqueueFrame(frame: ImageWorkerFrameEnvelope): void {
+    if (!isH264Frame(frame)) {
+      this.#pendingFrame = frame;
+      return;
+    }
+    this.#enqueueH264Frame(frame);
   }
 
   #trimPendingH264FramesIfNeeded(): void {
@@ -608,6 +657,9 @@ class ImageRenderWorkerRuntime {
         // ROS compressedDepth: PNG → 16UC1/32FC1, then same colormap path as RawImage.
         if (isCompressedDepthFormat(frame.format)) {
           const decoded = await decodeCompressedDepth(bytes, frame.format);
+          if (epoch !== this.#epoch) {
+            return;
+          }
           this.#renderRawFrame({
             receiveTime: frame.receiveTime,
             publishTime: frame.publishTime,
@@ -626,6 +678,9 @@ class ImageRenderWorkerRuntime {
 
         if (kind === 'h264') {
           await this.#decoder.submitFrame(frame, bytes, sortKey);
+          if (epoch !== this.#epoch) {
+            return;
+          }
           this.#updateH264Pressure();
           this.#emitMetricsIfDue();
           return;
@@ -637,36 +692,45 @@ class ImageRenderWorkerRuntime {
           `Compressed image decode timed out: ${frame.format}`,
           closeCanvasImageSource,
         );
-        let sourceToClose: ImageBitmap | VideoFrame | null = imageSource;
-        try {
-          const width = 'displayWidth' in imageSource ? imageSource.displayWidth : imageSource.width;
-          const height = 'displayHeight' in imageSource ? imageSource.displayHeight : imageSource.height;
-          const bitmap = isImageBitmap(imageSource)
-            ? imageSource
-            : await withTimeout(
-                createImageBitmap(imageSource as ImageBitmapSource),
-                OUTPUT_TIMEOUT_MS,
-                `Compressed image bitmap creation timed out: ${frame.format}`,
-                closeImageBitmap,
-              );
-          if (isImageBitmap(imageSource)) {
-            sourceToClose = null;
-          }
-          closeCanvasImageSourceIfNeeded(sourceToClose);
-          sourceToClose = null;
-          this.#storeBitmap(bitmap, width, height, frame.format, frame.receiveTime, frame.publishTime);
-          this.#drawBitmap(bitmap, width, height, frame.publishTime);
-          this.#emitStatus({
-            phase: 'ready',
-            width,
-            height,
-            encoding: frame.format,
-            receiveTime: frame.receiveTime,
-          });
-        } catch (err) {
-          closeCanvasImageSourceIfNeeded(sourceToClose);
-          throw err;
+        if (discardStaleAsyncResult(imageSource, epoch, this.#epoch)) {
+          return;
         }
+        const width = 'displayWidth' in imageSource ? imageSource.displayWidth : imageSource.width;
+        const height = 'displayHeight' in imageSource ? imageSource.displayHeight : imageSource.height;
+        let bitmap: ImageBitmap;
+        if (isImageBitmap(imageSource)) {
+          bitmap = imageSource;
+        } else {
+          try {
+            bitmap = await withTimeout(
+              createImageBitmap(imageSource as ImageBitmapSource),
+              OUTPUT_TIMEOUT_MS,
+              `Compressed image bitmap creation timed out: ${frame.format}`,
+              closeImageBitmap,
+            );
+          } finally {
+            closeCanvasImageSource(imageSource);
+          }
+          if (discardStaleAsyncResult(bitmap, epoch, this.#epoch)) {
+            return;
+          }
+        }
+        this.#storeBitmap(
+          bitmap,
+          width,
+          height,
+          frame.format,
+          frame.receiveTime,
+          frame.publishTime,
+        );
+        this.#drawBitmap(bitmap, width, height, frame.publishTime);
+        this.#emitStatus({
+          phase: 'ready',
+          width,
+          height,
+          encoding: frame.format,
+          receiveTime: frame.receiveTime,
+        });
         return;
       }
 
@@ -763,6 +827,7 @@ class ImageRenderWorkerRuntime {
       return;
     }
     const { videoFrame, sourceFrame } = pending;
+    const epoch = this.#epoch;
     const now = performance.now();
     try {
       const frameTimeNs = timeToKey(sourceFrame.receiveTime);
@@ -793,6 +858,9 @@ class ImageRenderWorkerRuntime {
       if (this.#h264Pressure.mode === 'normal' && now - this.#lastH264BitmapAt >= 500) {
         try {
           const bitmap = await createImageBitmap(videoFrame);
+          if (discardStaleAsyncResult(bitmap, epoch, this.#epoch)) {
+            return;
+          }
           this.#storeBitmap(
             bitmap,
             width,
@@ -1292,12 +1360,6 @@ function timeToKey(time: Time): bigint {
 
 function closeCanvasImageSource(source: ImageBitmap | VideoFrame): void {
   source.close();
-}
-
-function closeCanvasImageSourceIfNeeded(source: ImageBitmap | VideoFrame | null): void {
-  if (source) {
-    closeCanvasImageSource(source);
-  }
 }
 
 function closeImageBitmap(bitmap: ImageBitmap): void {

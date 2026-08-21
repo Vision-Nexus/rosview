@@ -71,6 +71,11 @@ export type ImageRenderWorkerRequest =
       overlay: ImageAnnotationsFrame | null;
     }
   | {
+      type: 'bootstrapH264';
+      frames: ImageWorkerFrameEnvelope[];
+      preserveFrame?: boolean;
+    }
+  | {
       type: 'reset';
       preserveFrame?: boolean;
     }
