@@ -3002,6 +3002,8 @@ var tn = {
 	"navbar.goHome": "Back to home"
 }, an = {
 	"panels.image.defaultTitle": "Image",
+	"panels.image.warning.annotationGap": "Some video frames have no matching annotation data.",
+	"panels.image.status.waitingForAnnotation": "Buffering until the matching annotation is ready…",
 	"panels.plot.defaultTitle": "Plot",
 	"panels.plot.toolbar.selectTopic": "Select topic…",
 	"panels.plot.toolbar.resetZoom": "Reset zoom",
@@ -3682,6 +3684,8 @@ var tn = {
 	"navbar.goHome": "ホームへ戻る"
 }, pn = {
 	"panels.image.defaultTitle": "画像",
+	"panels.image.warning.annotationGap": "一部の映像フレームに一致する注釈データがありません。",
+	"panels.image.status.waitingForAnnotation": "一致する注釈の準備ができるまでバッファリングしています…",
 	"panels.plot.defaultTitle": "プロット",
 	"panels.plot.toolbar.selectTopic": "トピックを選択…",
 	"panels.plot.toolbar.resetZoom": "ズームをリセット",
@@ -4362,6 +4366,8 @@ var tn = {
 	"navbar.goHome": "返回首页"
 }, xn = {
 	"panels.image.defaultTitle": "图像",
+	"panels.image.warning.annotationGap": "部分视频帧缺少匹配的标注数据。",
+	"panels.image.status.waitingForAnnotation": "正在缓冲，等待匹配的标注数据…",
 	"panels.plot.defaultTitle": "图表",
 	"panels.plot.toolbar.selectTopic": "选择 Topic…",
 	"panels.plot.toolbar.resetZoom": "重置缩放",

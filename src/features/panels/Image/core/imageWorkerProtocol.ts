@@ -20,6 +20,7 @@ export interface ImageViewport {
   devicePixelRatio: number;
 }
 
+/** An encoded frame plus the exact annotation decision for its MCAP log-time key. */
 export type ImageWorkerFrameEnvelope =
   | {
       kind: 'compressed';
@@ -27,6 +28,8 @@ export type ImageWorkerFrameEnvelope =
       publishTime: Time;
       format: string;
       data: Uint8Array;
+      /** Omitted without an annotation topic; `null` is a confirmed data gap. */
+      annotation?: ImageAnnotationsFrame | null;
     }
   | {
       kind: 'raw';
@@ -38,6 +41,8 @@ export type ImageWorkerFrameEnvelope =
       step?: number;
       isBigEndian?: boolean;
       data: Uint8Array;
+      /** Omitted without an annotation topic; `null` is a confirmed data gap. */
+      annotation?: ImageAnnotationsFrame | null;
     };
 
 export type ImageRenderWorkerRequest =
@@ -65,10 +70,6 @@ export type ImageRenderWorkerRequest =
   | {
       type: 'frame';
       frame: ImageWorkerFrameEnvelope;
-    }
-  | {
-      type: 'overlay';
-      overlay: ImageAnnotationsFrame | null;
     }
   | {
       type: 'bootstrapVideo';
@@ -111,4 +112,5 @@ export type ImageRenderWorkerEvent =
       timestampNs: bigint;
       width: number;
       height: number;
+      annotationState: 'disabled' | 'matched' | 'gap';
     };

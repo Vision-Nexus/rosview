@@ -127,6 +127,8 @@ export interface Player {
   unregisterHighFrequencyConsumer(consumerId: string): void;
   /** Playback time updates without going through React state (rAF path). Immediately emits the current time. */
   subscribeCurrentTime(cb: (time: Time) => void): Unsubscribe;
+  /** Fires only for explicit seeks, message steps, and loop wraps, never ordinary playback ticks. */
+  subscribeSeek(cb: (time: Time) => void): Unsubscribe;
   /** Latest playback time. Prefer this or subscribeCurrentTime for real-time playhead reads. */
   getCurrentTime(): Time | undefined;
   play(): void;

@@ -1,13 +1,13 @@
-import { a as e, d as t, f as n, i as r, l as i, n as a, o, p as s, r as c, s as l, t as u, u as d } from "./rafScheduler-CNDq0Etb.js";
+import { a as e, d as t, f as n, i as r, l as i, n as a, o, p as s, r as c, s as l, t as u, u as d } from "./rafScheduler-BAifbkGY.js";
 import { t as f } from "./createLucideIcon-DDY8HuQR.js";
 import { $ as p, A as m, B as h, C as g, D as _, E as v, F as y, J as b, K as x, L as S, M as C, N as w, O as T, Q as E, R as D, S as O, T as k, X as ee, Y as A, Z as j, a as te, at as M, b as ne, ct as re, et as ie, g as ae, h as oe, i as se, it as ce, k as le, lt as ue, nt as de, ot as fe, rt as pe, st as me, t as he, tt as ge, ut as _e, v as ve, y as ye, z as be } from "./usePlotTopicDetection-CxdeJrHu.js";
 import { t as xe } from "./chevron-right-4pIadFHI.js";
-import { A as N, C as Se, D as Ce, E as we, F as Te, I as Ee, L as De, M as Oe, N as ke, O as Ae, P, R as je, S as Me, _ as Ne, a as Pe, b as Fe, c as Ie, d as Le, f as Re, g as ze, h as Be, i as Ve, j as He, k as Ue, l as We, m as Ge, n as Ke, o as qe, p as Je, r as Ye, s as Xe, t as Ze, u as Qe, v as $e, w as et, x as tt, y as nt } from "./TopicQuickPicker-vzANSyR_.js";
-import { _ as rt, a as it, b as at, c as F, d as ot, f as st, h as ct, i as lt, l as ut, m as dt, n as ft, o as I, p as pt, r as mt, s as ht, t as gt, u as _t, v as vt, x as yt, y as bt } from "./resizable-Di0mzfPt.js";
+import { A as N, C as Se, D as Ce, E as we, F as Te, I as Ee, L as De, M as Oe, N as ke, O as Ae, P, R as je, S as Me, _ as Ne, a as Pe, b as Fe, c as Ie, d as Le, f as Re, g as ze, h as Be, i as Ve, j as He, k as Ue, l as We, m as Ge, n as Ke, o as qe, p as Je, r as Ye, s as Xe, t as Ze, u as Qe, v as $e, w as et, x as tt, y as nt } from "./TopicQuickPicker-C_vPX9PS.js";
+import { _ as rt, a as it, b as at, c as F, d as ot, f as st, h as ct, i as lt, l as ut, m as dt, n as ft, o as I, p as pt, r as mt, s as ht, t as gt, u as _t, v as vt, x as yt, y as bt } from "./resizable-Ds5T37MM.js";
 import { _ as xt, a as St, d as Ct, f as wt, h as Tt, i as Et, m as Dt, n as Ot, o as kt, p as At, r as jt, s as Mt, t as Nt, u as Pt } from "./rosMessageTypes-Di-HH75w.js";
 import { t as Ft } from "./messageBus-tPJ7Uycq.js";
 import { n as It } from "./useMessageBus-zT5FCuxY.js";
-import { a as Lt, d as Rt, f as zt, i as Bt, o as Vt, r as Ht, s as Ut, t as Wt, u as Gt } from "./imageAnnotations-DwyUos7b.js";
+import { a as Lt, d as Rt, f as zt, i as Bt, o as Vt, r as Ht, s as Ut, t as Wt, u as Gt } from "./imageAnnotations-DXWYifIU.js";
 import { n as Kt, t as qt } from "./defaults-CrWOF-m4.js";
 import { t as Jt } from "./shallow-DHPf4mbW.js";
 import { a as Yt, i as Xt, o as L, r as Zt, t as Qt } from "./time-BoEDgjoH.js";
@@ -2450,7 +2450,7 @@ function js({ config: e, setConfig: t, topics: r }) {
 }
 //#endregion
 //#region src/features/panels/Image/definition.tsx
-var Ms = rn(async () => ({ default: (await import("./ImagePanel-CMJSQH3Q.js")).ImagePanel })), Ns = {
+var Ms = rn(async () => ({ default: (await import("./ImagePanel-BI5mw1ya.js")).ImagePanel })), Ns = {
 	type: "Image",
 	defaultTitle: "Image",
 	schemaSupport: { supportedSchemas: [
@@ -2626,7 +2626,7 @@ function Us({ config: e, setConfig: t, topics: r }) {
 }
 //#endregion
 //#region src/features/panels/JointStatePlot/definition.tsx
-var Ws = rn(async () => ({ default: (await import("./JointStatePlotPanel-Bouft03B.js")).JointStatePlotComponent }));
+var Ws = rn(async () => ({ default: (await import("./JointStatePlotPanel-pR3rtHPT.js")).JointStatePlotComponent }));
 function Gs(e) {
 	let t = Ft.getLastMessage(e);
 	if (!t?.message || typeof t.message != "object") return [];
@@ -3012,7 +3012,7 @@ function sc({ config: e, setConfig: t, topics: r }) {
 }
 //#endregion
 //#region src/features/panels/RawMessages/definition.tsx
-var cc = rn(async () => ({ default: (await import("./RawMessagesPanel-CKVQ2s6D.js")).RawMessagesPanel })), lc = {
+var cc = rn(async () => ({ default: (await import("./RawMessagesPanel-CXtu8XXu.js")).RawMessagesPanel })), lc = {
 	type: "RawMessages",
 	defaultTitle: "Raw",
 	createDefaultConfig: ic,
@@ -3428,7 +3428,7 @@ function bc({ config: e, setConfig: t, topics: r }) {
 }
 //#endregion
 //#region src/features/panels/ThreeD/definition.tsx
-var xc = rn(async () => ({ default: (await import("./ThreeDPanel-I3dBFgJq.js")).ThreeDPanel })), Sc = {
+var xc = rn(async () => ({ default: (await import("./ThreeDPanel-Csmgs0k1.js")).ThreeDPanel })), Sc = {
 	type: "3D",
 	defaultTitle: "3D View",
 	autoLayoutHints: { alwaysInclude: !0 },
@@ -3759,7 +3759,7 @@ function Ic({ config: e, setConfig: t, topics: r }) {
 }
 //#endregion
 //#region src/features/panels/Pose/definition.tsx
-var Lc = rn(async () => ({ default: (await import("./PosePanel-D6wcAj4n.js")).PosePanel })), Rc = {
+var Lc = rn(async () => ({ default: (await import("./PosePanel-BWZokU-0.js")).PosePanel })), Rc = {
 	type: "Pose",
 	defaultTitle: "Pose",
 	schemaSupport: { supportedSchemas: [St] },
@@ -4458,7 +4458,7 @@ function vl({ config: e, setConfig: t, topics: i, player: a, panelId: o }) {
 }
 //#endregion
 //#region src/features/panels/Plot/definition.tsx
-var yl = rn(async () => ({ default: (await import("./PlotPanel-TlI5VjxI.js")).PlotPanel }));
+var yl = rn(async () => ({ default: (await import("./PlotPanel-QJJ-WivK.js")).PlotPanel }));
 function bl(e) {
 	if (!e.startsWith("/")) return {
 		topic: "",
@@ -4610,7 +4610,7 @@ function kl({ config: e, setConfig: t }) {
 }
 //#endregion
 //#region src/features/panels/TopicGraph/definition.tsx
-var Al = rn(async () => ({ default: (await import("./TopicGraphPanel-DbbUIbJG.js")).TopicGraphPanel })), jl = {
+var Al = rn(async () => ({ default: (await import("./TopicGraphPanel-BbdjebuW.js")).TopicGraphPanel })), jl = {
 	type: "TopicGraph",
 	defaultTitle: "Topic Graph",
 	createDefaultConfig: Dl,
@@ -4678,7 +4678,7 @@ function Rl({ config: e, setConfig: t }) {
 }
 //#endregion
 //#region src/features/panels/Timeline/definition.tsx
-var zl = rn(async () => ({ default: (await import("./TimelinePanel-CLCAgq_N.js")).TimelinePanel })), Bl = {
+var zl = rn(async () => ({ default: (await import("./TimelinePanel-DtCnCPit.js")).TimelinePanel })), Bl = {
 	type: "Timeline",
 	defaultTitle: "Timeline",
 	createDefaultConfig: Il,
@@ -4849,7 +4849,7 @@ function Xl({ config: e, setConfig: t }) {
 }
 //#endregion
 //#region src/features/panels/Align/definition.tsx
-var Zl = rn(async () => ({ default: (await import("./AlignPanel-CAJt0PA6.js")).AlignPanel })), Ql = {
+var Zl = rn(async () => ({ default: (await import("./AlignPanel-vmBRXkBQ.js")).AlignPanel })), Ql = {
 	type: "Align",
 	defaultTitle: "Align",
 	createDefaultConfig: Gl,
@@ -5071,7 +5071,7 @@ function cu({ config: e, setConfig: t, topics: r }) {
 }
 //#endregion
 //#region src/features/panels/Audio/definition.tsx
-var lu = rn(async () => ({ default: (await import("./AudioPanel-BBobMEM5.js")).AudioPanel })), uu = {
+var lu = rn(async () => ({ default: (await import("./AudioPanel-Ba46x8uM.js")).AudioPanel })), uu = {
 	type: "Audio",
 	defaultTitle: "Audio",
 	schemaSupport: { supportedSchemas: [
@@ -5186,7 +5186,7 @@ function xu(e) {
 }
 //#endregion
 //#region src/features/panels/UrdfDebug/definition.tsx
-var Su = rn(async () => ({ default: (await import("./UrdfDebugPanel-Csdt8BM3.js")).UrdfDebugPanel })), Cu = {
+var Su = rn(async () => ({ default: (await import("./UrdfDebugPanel-CN0m9pCl.js")).UrdfDebugPanel })), Cu = {
 	type: "UrdfDebug",
 	defaultTitle: "URDF Debug",
 	createDefaultConfig: lt,
@@ -22464,6 +22464,7 @@ var IE = class {
 	_prefetchRequestId = 0;
 	_lastPlaybackBufferRequestMs = -Infinity;
 	_timeSubscribers = /* @__PURE__ */ new Set();
+	_seekSubscribers = /* @__PURE__ */ new Set();
 	_rafId;
 	_lastPipelineEmitMs = 0;
 	_loadProgressPollId;
@@ -22491,6 +22492,11 @@ var IE = class {
 	subscribeCurrentTime(e) {
 		return this._timeSubscribers.add(e), e(this._currentTime), () => {
 			this._timeSubscribers.delete(e);
+		};
+	}
+	subscribeSeek(e) {
+		return this._seekSubscribers.add(e), () => {
+			this._seekSubscribers.delete(e);
 		};
 	}
 	getCurrentTime() {
@@ -22659,7 +22665,7 @@ var IE = class {
 	}
 	async _seekAsync(e) {
 		let t = this._advancePlaybackEpoch(), n = this._clampToRange(e), r = performance.now();
-		this._cancelRaf(), this._currentTime = n, this._clock.seek(n, r), this._lastTickWallMs = r, this._topicLastMessageNs.clear(), this._notifyTimeSubscribers(n), this._lastPipelineEmitMs = 0, this._emitState(), this._prioritizePlaybackBuffer(t, n);
+		this._cancelRaf(), this._currentTime = n, this._clock.seek(n, r), this._lastTickWallMs = r, this._topicLastMessageNs.clear(), this._notifySeekSubscribers(n), this._notifyTimeSubscribers(n), this._lastPipelineEmitMs = 0, this._emitState(), this._prioritizePlaybackBuffer(t, n);
 		try {
 			if (await this._closePlaybackCursor(), !this._isPlaybackEpochCurrent(t) || !this._isPlaybackEpochCurrent(t)) return;
 			let e = this._currentTopics();
@@ -22697,7 +22703,7 @@ var IE = class {
 				direction: e === 1 ? "next" : "prev"
 			});
 			if (!this._isPlaybackEpochCurrent(t) || !i || (await this._closePlaybackCursor(), !this._isPlaybackEpochCurrent(t))) return;
-			this._currentTime = this._clampToRange(i.receiveTime), this._clock.seek(this._currentTime, performance.now()), this._topicLastMessageNs.clear(), this._distributeMessages([i], this._currentTime), this._notifyTimeSubscribers(this._currentTime), this._lastPipelineEmitMs = 0, this._emitState(), this._scheduleNextTick();
+			this._currentTime = this._clampToRange(i.receiveTime), this._clock.seek(this._currentTime, performance.now()), this._topicLastMessageNs.clear(), this._notifySeekSubscribers(this._currentTime), this._distributeMessages([i], this._currentTime), this._notifyTimeSubscribers(this._currentTime), this._lastPipelineEmitMs = 0, this._emitState(), this._scheduleNextTick();
 		} catch (e) {
 			console.warn("IterablePlayer: stepMessage failed", e);
 		} finally {
@@ -22721,7 +22727,7 @@ var IE = class {
 		this._isLooping = e, this._emitState();
 	}
 	close() {
-		this._advancePlaybackEpoch(), this._clock.pause(performance.now()), this._isPlaying = !1, this._pageSuspended = !1, this._cancelRaf(), this._detachPageLifecycleListeners(), this._stopLoadProgressPolling(), this._closePlaybackCursor(), this._source.terminate(), this._state.presence = "closed", this._state.progress = {}, this._state.activeData = void 0, this._initialization = void 0, this._clock = new lE(), this._topicLastMessageNs.clear(), this._highFrequencyConsumersById.clear(), this._highFrequencyConsumersByTopic.clear(), this._emitState();
+		this._advancePlaybackEpoch(), this._clock.pause(performance.now()), this._isPlaying = !1, this._pageSuspended = !1, this._cancelRaf(), this._detachPageLifecycleListeners(), this._stopLoadProgressPolling(), this._closePlaybackCursor(), this._source.terminate(), this._state.presence = "closed", this._state.progress = {}, this._state.activeData = void 0, this._initialization = void 0, this._clock = new lE(), this._topicLastMessageNs.clear(), this._timeSubscribers.clear(), this._seekSubscribers.clear(), this._highFrequencyConsumersById.clear(), this._highFrequencyConsumersByTopic.clear(), this._emitState();
 	}
 	_cancelRaf() {
 		this._rafId != null && (cancelAnimationFrame(this._rafId), this._rafId = void 0);
@@ -22758,6 +22764,9 @@ var IE = class {
 	}
 	_notifyTimeSubscribers(e) {
 		for (let t of this._timeSubscribers) t(e);
+	}
+	_notifySeekSubscribers(e) {
+		for (let t of this._seekSubscribers) t(e);
 	}
 	_syncActiveDataSlice(e = {}) {
 		let t = this._state.activeData;
@@ -22899,7 +22908,7 @@ var IE = class {
 			if (this._isLooping) {
 				let e = this._advancePlaybackEpoch();
 				if (this._currentTime = this._initialization.start, this._clock.seek(this._currentTime, performance.now()), this._prioritizePlaybackBuffer(e, this._currentTime), await this._closePlaybackCursor(), !this._isPlaybackEpochCurrent(e)) return;
-				this._notifyTimeSubscribers(this._currentTime);
+				this._notifySeekSubscribers(this._currentTime), this._notifyTimeSubscribers(this._currentTime);
 				let t = this._currentTopics();
 				if (t.length > 0) {
 					let n = await this._source.getBackfillMessages({
@@ -23203,6 +23212,7 @@ var zE = class {
 	_closed = !1;
 	_state = RE();
 	_timeSubscribers = /* @__PURE__ */ new Set();
+	_seekSubscribers = /* @__PURE__ */ new Set();
 	constructor() {
 		e.getState().setPlayerState(this._state);
 	}
@@ -23221,12 +23231,19 @@ var zE = class {
 			this._timeSubscribers.delete(e);
 		};
 	}
+	subscribeSeek(e) {
+		return this._seekSubscribers.add(e), () => {
+			this._seekSubscribers.delete(e);
+		};
+	}
 	getCurrentTime() {
 		return this._currentTime();
 	}
 	play() {}
 	pause() {}
-	seek(e) {}
+	seek(e) {
+		for (let t of this._seekSubscribers) t(e);
+	}
 	stepBy(e) {}
 	stepMessage(e) {}
 	getMessagesInTimeRange(e) {
@@ -23240,7 +23257,7 @@ var zE = class {
 	}
 	setLooping(e) {}
 	close() {
-		this._closed || (this._closed = !0, this._timeSubscribers.clear(), this._state = {
+		this._closed || (this._closed = !0, this._timeSubscribers.clear(), this._seekSubscribers.clear(), this._state = {
 			presence: "closed",
 			progress: {}
 		}, e.getState().setPlayerState(this._state), e.getState().setSubscriptions([]));

@@ -219,12 +219,12 @@ var H = {
 function U(e) {
 	return e.toLowerCase().replaceAll("_", "").endsWith("imageannotations");
 }
-function W(e) {
+function W(e, t) {
 	if (!Z(e) || !Array.isArray(e.points)) return null;
-	let t = e.points.map(G).filter($), n = K(e.timestamp) ?? q(e.points);
-	return n === void 0 ? null : {
-		timestampNs: n,
-		points: t
+	let n = e.points.map(G).filter($), r = K(e.timestamp) ?? q(e.points) ?? (e.points.length === 0 ? t : void 0);
+	return r === void 0 ? null : {
+		timestampNs: r,
+		points: n
 	};
 }
 function G(e) {

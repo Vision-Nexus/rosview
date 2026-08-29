@@ -410,6 +410,26 @@ describe('IterablePlayer playback clock', () => {
     player.close();
   });
 
+  it('notifies seek subscribers for forward seeks without an initial emission', async () => {
+    const source = makeSource([]);
+    const player = new IterablePlayer(source);
+    const seenTimes: number[] = [];
+
+    await player.initialize({});
+    const unsubscribe = player.subscribeSeek((time) => {
+      seenTimes.push(time.sec + time.nsec / 1e9);
+    });
+    expect(seenTimes).toEqual([]);
+
+    player.seek({ sec: 3, nsec: 250_000_000 });
+    await flushAsyncWork();
+    expect(seenTimes).toEqual([3.25]);
+
+    unsubscribe();
+    player.close();
+  });
+
+
   it('does not advance pipeline-store currentTime on pure playback ticks', async () => {
     let now = 0;
     let nextRafId = 1;

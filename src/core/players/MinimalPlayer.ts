@@ -37,6 +37,7 @@ export class MinimalPlayer implements Player {
   private _closed = false;
   private _state: PlayerState = createReadyState();
   private _timeSubscribers = new Set<(time: Time) => void>();
+  private _seekSubscribers = new Set<(time: Time) => void>();
 
   constructor() {
     useMessagePipelineStore.getState().setPlayerState(this._state);
@@ -68,6 +69,14 @@ export class MinimalPlayer implements Player {
     };
   }
 
+  subscribeSeek(cb: (time: Time) => void): () => void {
+    this._seekSubscribers.add(cb);
+    return () => {
+      this._seekSubscribers.delete(cb);
+    };
+  }
+
+
   getCurrentTime(): Time | undefined {
     return this._currentTime();
   }
@@ -76,7 +85,9 @@ export class MinimalPlayer implements Player {
 
   pause(): void {}
 
-  seek(_time: Time): void {}
+  seek(time: Time): void {
+    for (const cb of this._seekSubscribers) cb(time);
+  }
 
   stepBy(_deltaMs: number): void {}
 
@@ -102,6 +113,7 @@ export class MinimalPlayer implements Player {
     if (this._closed) return;
     this._closed = true;
     this._timeSubscribers.clear();
+    this._seekSubscribers.clear();
     this._state = { presence: 'closed', progress: {} };
     useMessagePipelineStore.getState().setPlayerState(this._state);
     useMessagePipelineStore.getState().setSubscriptions([]);

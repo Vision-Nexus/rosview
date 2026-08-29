@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { Player } from '@/core/types/player';
 import type { MessageEvent as RosMessageEvent } from '@/core/types/ros';
 import {
@@ -71,6 +71,73 @@ describe.each([
     expect(posts).toHaveLength(1);
     expect(posts[0]).toMatchObject({ type: 'bootstrapVideo', codec });
   });
+
+  it('pairs bootstrap frames by exact MCAP log time', async () => {
+    const annotationTopic = '/camera/annotations';
+    const annotations = messages.map((message) => ({
+      ...event(message.receiveTime.sec, 'annotation', new Uint8Array()),
+      topic: annotationTopic,
+      message: {
+        timestamp: { sec: message.receiveTime.sec - 1, nsec: 0 },
+        points: [],
+      },
+      schemaName: 'foxglove.ImageAnnotations',
+    }));
+    const posts: Array<{ frames?: Array<{ annotation?: { timestampNs: bigint } | null }> }> = [];
+    const getMessagesInTimeRange = vi.fn(async () => [...messages, ...annotations]);
+    const worker = {
+      postMessage: (message: { frames?: Array<{ annotation?: { timestampNs: bigint } | null }> }) =>
+        posts.push(message),
+    } as Worker;
+    const player = { getMessagesInTimeRange } as unknown as Player;
+
+    await expect(
+      executeVideoBootstrap({
+        player,
+        worker,
+        topic: '/camera/video',
+        annotationTopic,
+        targetTime: { sec: 3, nsec: 0 },
+        codec,
+      }),
+    ).resolves.toBe(true);
+    expect(getMessagesInTimeRange).toHaveBeenCalledWith(
+      expect.objectContaining({ topics: ['/camera/video', annotationTopic] }),
+    );
+    expect(posts[0]?.frames?.map((frame) => frame.annotation?.timestampNs)).toEqual([
+      1_000_000_000n,
+      2_000_000_000n,
+      3_000_000_000n,
+    ]);
+  });
+
+  it('does not merge live frames that arrive after the bootstrap query starts', async () => {
+    const liveEvents = [event(2, codec, delta)];
+    const lateFrame = event(4, codec, delta);
+    const posts: Array<{ frames?: Array<{ receiveTime: { sec: number } }> }> = [];
+    const worker = {
+      postMessage: (message: { frames?: Array<{ receiveTime: { sec: number } }> }) =>
+        posts.push(message),
+    } as Worker;
+    const player = {
+      getMessagesInTimeRange: async () => {
+        liveEvents.push(lateFrame);
+        return messages;
+      },
+    } as unknown as Player;
+
+    await expect(
+      executeVideoBootstrap({
+        player,
+        worker,
+        topic: '/camera/video',
+        targetTime: { sec: 3, nsec: 0 },
+        codec,
+        liveEvents,
+      }),
+    ).resolves.toBe(true);
+    expect(posts[0]?.frames?.map((frame) => frame.receiveTime.sec)).toEqual([1, 2, 3]);
+  });
 });
 
 describe('video bootstrap admission', () => {
@@ -88,6 +155,31 @@ describe('video bootstrap admission', () => {
         codec: 'h265',
       }),
     ).resolves.toBe(false);
+  });
+
+  it('marks a missing exact bootstrap annotation as a data gap', async () => {
+    const onAnnotationGap = vi.fn();
+    const posts: Array<{ frames?: Array<{ annotation?: unknown }> }> = [];
+    const worker = {
+      postMessage: (message: { frames?: Array<{ annotation?: unknown }> }) => posts.push(message),
+    } as Worker;
+    const player = {
+      getMessagesInTimeRange: async () => [event(1, 'h264', h264Key)],
+    } as unknown as Player;
+
+    await expect(
+      executeVideoBootstrap({
+        player,
+        worker,
+        topic: '/camera/video',
+        annotationTopic: '/camera/annotations',
+        targetTime: { sec: 1, nsec: 0 },
+        codec: 'h264',
+        onAnnotationGap,
+      }),
+    ).resolves.toBe(true);
+    expect(posts[0]?.frames?.[0]?.annotation).toBeNull();
+    expect(onAnnotationGap).toHaveBeenCalledOnce();
   });
 
   it('retains same-timestamp H.265 VPS/SPS/PPS packets in the bootstrap', async () => {

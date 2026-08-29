@@ -1,6 +1,12 @@
 import { test, expect } from '@playwright/test';
-import { MCAP_H264, MCAP_H264_URL, requireFixture } from './fixturePaths';
-import { openFixtureByUrl } from './helpers/rosview';
+import {
+  MCAP_H264,
+  MCAP_H264_PAIR_ANNOTATIONS,
+  MCAP_H264_PAIR_CAMERAS,
+  MCAP_H264_URL,
+  requireFixture,
+} from './fixturePaths';
+import { attachBrowserDiagnostics, openFixtureByUrl, waitForRosviewReady } from './helpers/rosview';
 
 test.describe.configure({ timeout: 120_000 });
 
@@ -47,6 +53,7 @@ test('H.264 CompressedImage decodes without error', async ({ page }) => {
   const hasDecodeFailure = await page.getByText(/decode failed|could not be decoded/i).count();
   expect(hasDecodeFailure).toBe(0);
 
+
   const imageStatus = page.getByTestId('image-panel-status');
   if (await imagePanel.isVisible().catch(() => false)) {
     await expect(imageStatus).toBeVisible({ timeout: 90_000 });
@@ -87,4 +94,56 @@ test('H.264 CompressedImage decodes without error', async ({ page }) => {
     await expect(imagePanel).toHaveAttribute('data-video-pressure', /^(normal|degraded|recovery)$/);
     expect(await page.getByText(/decode failed|could not be decoded/i).count()).toBe(0);
   }
+});
+test('five H.264 panels render only exact paired annotations', async ({ page }) => {
+  const diagnostics = attachBrowserDiagnostics(page);
+  for (const fixture of [...MCAP_H264_PAIR_CAMERAS, MCAP_H264_PAIR_ANNOTATIONS]) {
+    requireFixture(fixture);
+  }
+  await page.goto('/');
+  await page
+    .locator('#rosview-landing-file')
+    .setInputFiles([...MCAP_H264_PAIR_CAMERAS, MCAP_H264_PAIR_ANNOTATIONS]);
+  await waitForRosviewReady(page, { diagnostics, timeoutMs: 90_000 });
+
+  const panels = page.getByTestId('image-panel');
+  await expect(panels).toHaveCount(5);
+  const play = page.getByRole('button', { name: 'Play playback' });
+  if (await play.isVisible().catch(() => false)) await play.click();
+
+  await expect
+    .poll(
+      () => panels.evaluateAll((elements) => elements.map((element) => element.getAttribute('data-annotation-state'))),
+      { timeout: 90_000 },
+    )
+    .toEqual(Array.from({ length: 5 }, () => 'matched'));
+  await expect(page.getByTestId('image-annotation-gap-warning')).toHaveCount(0);
+
+  const track = page.getByTestId('playback-track');
+  const trackBox = await track.boundingBox();
+  expect(trackBox).not.toBeNull();
+  await page.mouse.click(trackBox!.x + trackBox!.width * 0.7, trackBox!.y + trackBox!.height / 2);
+  await page.waitForTimeout(300);
+  await expect
+    .poll(
+      () => panels.evaluateAll((elements) => elements.map((element) => element.getAttribute('data-annotation-state'))),
+      { timeout: 30_000 },
+    )
+    .toEqual(Array.from({ length: 5 }, () => 'matched'));
+  await expect(page.getByTestId('image-annotation-gap-warning')).toHaveCount(0);
+
+  await page.getByTestId('playback-speed-trigger').click();
+  await page.getByRole('menuitem', { name: '8x', exact: true }).click();
+  const resume = page.getByRole('button', { name: 'Play playback' });
+  if (await resume.isVisible().catch(() => false)) await resume.click();
+  await page.waitForTimeout(1_500);
+  await expect
+    .poll(
+      () => panels.evaluateAll((elements) => elements.map((element) => element.getAttribute('data-annotation-state'))),
+      { timeout: 30_000 },
+    )
+    .toEqual(Array.from({ length: 5 }, () => 'matched'));
+  await expect(page.getByTestId('image-annotation-gap-warning')).toHaveCount(0);
+  expect(diagnostics.pageErrors).toEqual([]);
+  expect(diagnostics.consoleErrors).toEqual([]);
 });

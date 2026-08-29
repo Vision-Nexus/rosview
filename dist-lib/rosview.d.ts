@@ -356,6 +356,7 @@ export declare class MinimalPlayer implements Player {
     private _closed;
     private _state;
     private _timeSubscribers;
+    private _seekSubscribers;
     constructor();
     setListener(listener: (state: PlayerState) => void): void;
     setSubscriptions(_subscriptions: Subscription[]): void;
@@ -364,10 +365,11 @@ export declare class MinimalPlayer implements Player {
     registerHighFrequencyConsumer(_consumerId: string, _consumer: HighFrequencyConsumer): void;
     unregisterHighFrequencyConsumer(_consumerId: string): void;
     subscribeCurrentTime(cb: (time: Time) => void): () => void;
+    subscribeSeek(cb: (time: Time) => void): () => void;
     getCurrentTime(): Time | undefined;
     play(): void;
     pause(): void;
-    seek(_time: Time): void;
+    seek(time: Time): void;
     stepBy(_deltaMs: number): void;
     stepMessage(_direction: -1 | 1): void;
     getMessagesInTimeRange(_args: GetMessagesInTimeRangeArgs): Promise<MessageEvent_2[]>;
@@ -482,6 +484,8 @@ export declare interface Player {
     unregisterHighFrequencyConsumer(consumerId: string): void;
     /** Playback time updates without going through React state (rAF path). Immediately emits the current time. */
     subscribeCurrentTime(cb: (time: Time) => void): Unsubscribe;
+    /** Fires only for explicit seeks, message steps, and loop wraps, never ordinary playback ticks. */
+    subscribeSeek(cb: (time: Time) => void): Unsubscribe;
     /** Latest playback time. Prefer this or subscribeCurrentTime for real-time playhead reads. */
     getCurrentTime(): Time | undefined;
     play(): void;

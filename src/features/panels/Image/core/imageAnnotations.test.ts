@@ -1,10 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
-  drawImageAnnotations,
-  isImageAnnotationsSchema,
-  parseImageAnnotations,
-  selectSynchronizedImageAnnotations,
-} from './imageAnnotations';
+import { drawImageAnnotations, isImageAnnotationsSchema, parseImageAnnotations } from './imageAnnotations';
 
 describe('foxglove.ImageAnnotations parsing', () => {
   it('normalizes numeric and named point annotation enums', () => {
@@ -50,7 +45,7 @@ describe('foxglove.ImageAnnotations schema matching', () => {
   });
 });
 
-describe('annotation rendering and synchronization', () => {
+describe('annotation rendering', () => {
   it('draws point circles and line-list segments', () => {
     const overlay = parseImageAnnotations({
       points: [
@@ -89,10 +84,4 @@ describe('annotation rendering and synchronization', () => {
     expect(calls).toContain('line:130,150');
   });
 
-  it('selects the nearest annotation within the default eight-millisecond window', () => {
-    const early = { timestampNs: 1_000_000_000n, points: [] };
-    const late = { timestampNs: 1_033_000_000n, points: [] };
-    expect(selectSynchronizedImageAnnotations([early, late], 1_034_000_000n)).toBe(late);
-    expect(selectSynchronizedImageAnnotations([early, late], 1_050_000_000n)).toBeNull();
-  });
 });

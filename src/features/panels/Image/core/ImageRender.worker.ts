@@ -39,11 +39,7 @@ import {
   normalizeCompressedMime,
   type ImageSurfaceStatus,
 } from './imageTypes';
-import {
-  drawImageAnnotations,
-  selectSynchronizedImageAnnotations,
-  type ImageAnnotationsFrame,
-} from './imageAnnotations';
+import { drawImageAnnotations, type ImageAnnotationsFrame } from './imageAnnotations';
 import { discardStaleAsyncResult } from './asyncEpoch';
 import type {
   ImageRenderOptions,
@@ -277,7 +273,7 @@ type CachedFrame =
       isBigEndian: boolean;
       data: Uint8Array<ArrayBuffer>;
       receiveTime: Time;
-      publishTime: Time;
+      annotation?: ImageAnnotationsFrame | null;
     }
   | {
       kind: 'bitmap';
@@ -286,7 +282,7 @@ type CachedFrame =
       encoding: string;
       bitmap: ImageBitmap;
       receiveTime: Time;
-      publishTime: Time;
+      annotation?: ImageAnnotationsFrame | null;
     };
 
 // ---------- Main runtime ----------
@@ -299,7 +295,6 @@ class ImageRenderWorkerRuntime {
   #renderOptions: ImageRenderOptions = { ...DEFAULT_RENDER_OPTIONS };
   #viewport: ImageViewport = { ...DEFAULT_VIEWPORT };
   #rawDecodeOptions: Partial<RawImageDecodeOptions> = {};
-  #overlays: ImageAnnotationsFrame[] = [];
   #pendingFrame: ImageWorkerFrameEnvelope | null = null;
   #pendingVideoFrames: ImageWorkerFrameEnvelope[] = [];
   #isProcessing = false;
@@ -403,19 +398,6 @@ class ImageRenderWorkerRuntime {
         }
         return;
 
-      case 'overlay':
-        if (!message.overlay) {
-          this.#overlays = [];
-        } else {
-          const existing = this.#overlays.findIndex(
-            (overlay) => overlay.timestampNs === message.overlay?.timestampNs,
-          );
-          if (existing >= 0) this.#overlays[existing] = message.overlay;
-          else this.#overlays.push(message.overlay);
-          if (this.#overlays.length > 120) this.#overlays.shift();
-        }
-        this.#redrawCachedFrameForOverlay();
-        return;
 
       case 'bootstrapVideo':
         this.#bootstrapVideo(message.codec, message.frames, message.preserveFrame === true);
@@ -430,7 +412,6 @@ class ImageRenderWorkerRuntime {
         this.#resetVideoRuntimeState();
         this.#decoder.reset();
         this.#disposeAuxiliaryDecodeState();
-        this.#overlays = [];
         if (!message.preserveFrame) {
           this.#disposeCachedBitmap();
           this.#cachedFrame = null;
@@ -677,13 +658,13 @@ class ImageRenderWorkerRuntime {
           }
           this.#renderRawFrame({
             receiveTime: frame.receiveTime,
-            publishTime: frame.publishTime,
             encoding: decoded.encoding,
             width: decoded.width,
             height: decoded.height,
             step: decoded.step,
             isBigEndian: decoded.isBigEndian,
             data: ensureOwnedBytes(decoded.data),
+            annotation: frame.annotation,
           });
           return;
         }
@@ -734,9 +715,9 @@ class ImageRenderWorkerRuntime {
           height,
           frame.format,
           frame.receiveTime,
-          frame.publishTime,
+          frame.annotation,
         );
-        this.#drawBitmap(bitmap, width, height, frame.publishTime);
+        this.#drawBitmap(bitmap, width, height, frame.receiveTime, frame.annotation);
         this.#emitStatus({
           phase: 'ready',
           width,
@@ -751,13 +732,13 @@ class ImageRenderWorkerRuntime {
       const bytes = ensureOwnedBytes(frame.data);
       this.#renderRawFrame({
         receiveTime: frame.receiveTime,
-        publishTime: frame.publishTime,
         encoding: frame.encoding,
         width: frame.width,
         height: frame.height,
         step: frame.step ?? (frame.width * bytesPerPixel(frame.encoding)),
         isBigEndian: frame.isBigEndian ?? false,
         data: bytes,
+        annotation: frame.annotation,
       });
     } catch (error) {
       if (epoch !== this.#epoch) {
@@ -854,7 +835,13 @@ class ImageRenderWorkerRuntime {
 
       const width = videoFrame.displayWidth || videoFrame.codedWidth;
       const height = videoFrame.displayHeight || videoFrame.codedHeight;
-      if (!this.#drawCanvasImageSource(videoFrame, width, height, sourceFrame.publishTime)) {
+      if (!this.#drawCanvasImageSource(
+        videoFrame,
+        width,
+        height,
+        sourceFrame.receiveTime,
+        sourceFrame.annotation,
+      )) {
         this.#droppedVideoFrames += 1;
         return;
       }
@@ -880,7 +867,7 @@ class ImageRenderWorkerRuntime {
             height,
             sourceFrame.kind === 'compressed' ? sourceFrame.format : (this.#activeVideoCodec ?? 'h264'),
             sourceFrame.receiveTime,
-            sourceFrame.publishTime,
+            sourceFrame.annotation,
           );
           this.#lastVideoBitmapAt = now;
         } catch {
@@ -1005,13 +992,13 @@ class ImageRenderWorkerRuntime {
 
   #renderRawFrame(frame: {
     receiveTime: Time;
-    publishTime: Time;
     encoding: string;
     width: number;
     height: number;
     step: number;
     isBigEndian: boolean;
     data: Uint8Array<ArrayBuffer>;
+    annotation?: ImageAnnotationsFrame | null;
   }): void {
     const pixelBytes = frame.width * frame.height * 4;
     let rgba = this.#rawRgba;
@@ -1046,10 +1033,10 @@ class ImageRenderWorkerRuntime {
       isBigEndian: frame.isBigEndian,
       data: frame.data,
       receiveTime: frame.receiveTime,
-      publishTime: frame.publishTime,
+      annotation: frame.annotation,
     };
 
-    this.#drawRawImageData(frame.width, frame.height, frame.publishTime);
+    this.#drawRawImageData(frame.width, frame.height, frame.receiveTime, frame.annotation);
     this.#emitStatus({
       phase: 'ready',
       width: frame.width,
@@ -1087,7 +1074,7 @@ class ImageRenderWorkerRuntime {
         rgba,
         this.#rawDecodeOptions,
       );
-      this.#drawRawImageData(cached.width, cached.height, cached.publishTime);
+      this.#drawRawImageData(cached.width, cached.height, cached.receiveTime, cached.annotation);
       this.#emitStatus({
         phase: 'ready',
         width: cached.width,
@@ -1100,21 +1087,6 @@ class ImageRenderWorkerRuntime {
     }
   }
 
-  #redrawCachedFrameForOverlay(): void {
-    const cached = this.#cachedFrame;
-    if (cached?.kind === 'bitmap' && videoCodecFromFormat(cached.encoding)) {
-      // Video retains only a periodic bitmap for option and viewport redraws.
-      // Redraw it only when it is the frame still visible on the canvas.
-      if (
-        this.#lastDrawnMediaTimeNs !== null &&
-        timeToKey(cached.publishTime) === this.#lastDrawnMediaTimeNs
-      ) {
-        this.#redrawCachedFrame();
-      }
-      return;
-    }
-    this.#redrawCachedFrame();
-  }
 
   /** Redraw the cached frame with current renderOptions / viewport. */
   #redrawCachedFrame(): void {
@@ -1124,7 +1096,7 @@ class ImageRenderWorkerRuntime {
       return;
     }
     if (cached.kind === 'raw') {
-      this.#drawRawImageData(cached.width, cached.height, cached.publishTime);
+      this.#drawRawImageData(cached.width, cached.height, cached.receiveTime, cached.annotation);
       this.#emitStatus({
         phase: 'ready',
         width: cached.width,
@@ -1133,7 +1105,7 @@ class ImageRenderWorkerRuntime {
         receiveTime: cached.receiveTime,
       });
     } else {
-      this.#drawBitmap(cached.bitmap, cached.width, cached.height, cached.publishTime);
+      this.#drawBitmap(cached.bitmap, cached.width, cached.height, cached.receiveTime, cached.annotation);
       this.#emitStatus({
         phase: 'ready',
         width: cached.width,
@@ -1150,10 +1122,18 @@ class ImageRenderWorkerRuntime {
     height: number,
     encoding: string,
     receiveTime: Time,
-    publishTime: Time,
+    annotation?: ImageAnnotationsFrame | null,
   ): void {
     this.#disposeCachedBitmap();
-    this.#cachedFrame = { kind: 'bitmap', width, height, encoding, bitmap, receiveTime, publishTime };
+    this.#cachedFrame = {
+      kind: 'bitmap',
+      width,
+      height,
+      encoding,
+      bitmap,
+      receiveTime,
+      annotation,
+    };
   }
 
   #disposeCachedBitmap(): void {
@@ -1203,23 +1183,35 @@ class ImageRenderWorkerRuntime {
     workerScope.postMessage(event);
   }
 
-  #drawRawImageData(width: number, height: number, publishTime: Time): void {
+  #drawRawImageData(
+    width: number,
+    height: number,
+    frameTime: Time,
+    annotation?: ImageAnnotationsFrame | null,
+  ): void {
     ensureBufferCanvas(this.#bufferCanvas, width, height);
     this.#bufferCtx!.putImageData(this.#rawImageData!, 0, 0);
-    this.#drawCanvasImageSource(this.#bufferCanvas, width, height, publishTime);
+    this.#drawCanvasImageSource(this.#bufferCanvas, width, height, frameTime, annotation);
   }
 
-  #drawBitmap(bitmap: ImageBitmap, width: number, height: number, publishTime: Time): void {
-    this.#drawCanvasImageSource(bitmap, width, height, publishTime);
+  #drawBitmap(
+    bitmap: ImageBitmap,
+    width: number,
+    height: number,
+    frameTime: Time,
+    annotation?: ImageAnnotationsFrame | null,
+  ): void {
+    this.#drawCanvasImageSource(bitmap, width, height, frameTime, annotation);
   }
 
   #drawCanvasImageSource(
     source: CanvasImageSource,
     sourceWidth: number,
     sourceHeight: number,
-    publishTime: Time,
+    frameTime: Time,
+    annotation?: ImageAnnotationsFrame | null,
   ): boolean {
-    const imageTimestampNs = timeToKey(publishTime);
+    const imageTimestampNs = timeToKey(frameTime);
     if (isRetrogradeMediaFrame(this.#isPlaying, this.#lastDrawnMediaTimeNs, imageTimestampNs)) {
       return false;
     }
@@ -1253,11 +1245,10 @@ class ImageRenderWorkerRuntime {
     ctx.rotate((rotDeg * Math.PI) / 180);
     ctx.scale(this.#renderOptions.flipHorizontal ? -1 : 1, this.#renderOptions.flipVertical ? -1 : 1);
     ctx.drawImage(source, -drawWidth / 2, -drawHeight / 2, drawWidth, drawHeight);
-    const overlay = selectSynchronizedImageAnnotations(this.#overlays, imageTimestampNs);
-    if (overlay) {
+    if (annotation) {
       ctx.translate(-drawWidth / 2, -drawHeight / 2);
       ctx.scale(scale, scale);
-      drawImageAnnotations(ctx, overlay);
+      drawImageAnnotations(ctx, annotation);
     }
     ctx.restore();
     this.#lastDrawnMediaTimeNs = imageTimestampNs;
@@ -1266,6 +1257,7 @@ class ImageRenderWorkerRuntime {
       timestampNs: imageTimestampNs,
       width: sourceWidth,
       height: sourceHeight,
+      annotationState: annotation === undefined ? 'disabled' : annotation === null ? 'gap' : 'matched',
     } satisfies ImageRenderWorkerEvent);
     return true;
   }
