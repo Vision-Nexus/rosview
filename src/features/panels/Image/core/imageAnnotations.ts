@@ -1,5 +1,3 @@
-const ANNOTATION_SYNC_TOLERANCE_NS = 8_000_000n;
-
 interface AnnotationColor {
   r: number;
   g: number;
@@ -44,35 +42,22 @@ export function isImageAnnotationsSchema(schemaName: string): boolean {
 }
 
 
-export function parseImageAnnotations(message: unknown): ImageAnnotationsFrame | null {
+export function parseImageAnnotations(
+  message: unknown,
+  emptyFrameTimestampNs?: bigint,
+): ImageAnnotationsFrame | null {
   if (!isRecord(message) || !Array.isArray(message.points)) return null;
 
   const points = message.points.map(parsePointsAnnotation).filter(isPresent);
   const timestampNs =
-    readTimestampNs(message.timestamp) ?? firstAnnotationTimestampNs(message.points);
+    readTimestampNs(message.timestamp) ??
+    firstAnnotationTimestampNs(message.points) ??
+    (message.points.length === 0 ? emptyFrameTimestampNs : undefined);
   if (timestampNs === undefined) return null;
 
   return { timestampNs, points };
 }
 
-export function selectSynchronizedImageAnnotations(
-  overlays: readonly ImageAnnotationsFrame[],
-  imageTimestampNs: bigint,
-  toleranceNs = ANNOTATION_SYNC_TOLERANCE_NS,
-): ImageAnnotationsFrame | null {
-  let best: ImageAnnotationsFrame | null = null;
-  let bestDelta = toleranceNs + 1n;
-  for (const overlay of overlays) {
-    const delta = overlay.timestampNs >= imageTimestampNs
-      ? overlay.timestampNs - imageTimestampNs
-      : imageTimestampNs - overlay.timestampNs;
-    if (delta < bestDelta) {
-      best = overlay;
-      bestDelta = delta;
-    }
-  }
-  return bestDelta <= toleranceNs ? best : null;
-}
 
 export function drawImageAnnotations(
   context: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,

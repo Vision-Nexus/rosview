@@ -1,5 +1,7 @@
 {
   "panels.image.defaultTitle": "画像",
+  "panels.image.warning.annotationGap": "一部の映像フレームに一致する注釈データがありません。",
+  "panels.image.status.waitingForAnnotation": "一致する注釈の準備ができるまでバッファリングしています…",
   "panels.plot.defaultTitle": "プロット",
   "panels.plot.toolbar.selectTopic": "トピックを選択…",
   "panels.plot.toolbar.resetZoom": "ズームをリセット",

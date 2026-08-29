@@ -2,9 +2,10 @@ import React, { useEffect, useRef, useState } from 'react';
 import { useIntl } from 'react-intl';
 import type { Player } from '@/core/types/player';
 import { useMessagePipeline } from '@/core/pipeline/useMessagePipeline';
-import type { MessageEvent as RosMessageEvent } from '@/core/types/ros';
+import type { MessageEvent as RosMessageEvent, Time } from '@/core/types/ros';
 import { scheduleFrame } from '@/shared/utils/rafScheduler';
-import { addMs, toNano } from '@/shared/utils/time';
+import { fromNano, toNano } from '@/shared/utils/time';
+import type { ImageAnnotationsFrame } from './core/imageAnnotations';
 import type { RawImageDecodeOptions } from './core/imageColorMode';
 import type {
   ImageRenderMetrics,
@@ -18,9 +19,12 @@ import {
   type ImageSurfaceStatus,
 } from './core/imageTypes';
 import { executeVideoBootstrap } from './core/videoSeekRepair';
+import {
+  FrameAnnotationPairer,
+  type ImageFrameAnnotationPair,
+} from './core/frameAnnotationPairer';
 import { isVideoMessageEvent, toWorkerFrame, videoCodecForMessageEvent } from './core/messageFrameAdapter';
 import { applyDepthTopicPreset } from './core/depthColorDefaults';
-import { parseImageAnnotations } from './core/imageAnnotations';
 import type { ImageConfig } from './defaults';
 import { TopicQuickPicker } from '../framework/TopicQuickPicker';
 import { PanelTopicBar } from '../framework/PanelTopicBar';
@@ -79,8 +83,6 @@ export const ImagePanel: React.FC<ImagePanelProps> = (props) => {
   const workerRef = useRef<Worker | null>(null);
   const workerDisposeTimerRef = useRef<number | null>(null);
   const transferredCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  const lastPlaybackTimeNsRef = useRef<bigint | null>(null);
-  const seekRepairGenerationRef = useRef(0);
   const lastUiStatusRef = useRef<ImageSurfaceStatus>({ phase: 'idle' });
   const videoSeekRepairAbortRef = useRef<AbortController | null>(null);
   const videoOrderedModeRef = useRef(false);
@@ -88,8 +90,21 @@ export const ImagePanel: React.FC<ImagePanelProps> = (props) => {
   const videoBootstrapGenerationRef = useRef(0);
   const videoBufferedLiveRef = useRef<RosMessageEvent[]>([]);
   const consumerModeRef = useRef<'latest' | 'all'>('latest');
+  const frameAnnotationPairerRef = useRef<FrameAnnotationPairer | null>(null);
+  const deliverAnnotationPairsRef = useRef<
+    ((pairs: ImageFrameAnnotationPair[]) => void) | null
+  >(null);
+  const runVideoBootstrapRef = useRef<
+    ((targetTime: Time | undefined, preserveFrame: boolean) => Promise<boolean>) | null
+  >(null);
   const [status, setStatus] = useState<ImageSurfaceStatus>({ phase: 'idle' });
   const [metrics, setMetrics] = useState<ImageRenderMetrics | null>(null);
+  const [annotationGap, setAnnotationGap] = useState(false);
+  const annotationRangeAbortRef = useRef<AbortController | null>(null);
+  const [annotationWaiting, setAnnotationWaiting] = useState(false);
+  const [renderedAnnotationState, setRenderedAnnotationState] = useState<
+    'disabled' | 'matched' | 'gap'
+  >('disabled');
   const imageConsumerId = `${panelId}:image-main`;
   const annotationConsumerId = `${panelId}:image-annotations`;
   const selectedAnnotationTopic = annotationVisible ? annotationTopic.trim() : '';
@@ -146,6 +161,11 @@ export const ImagePanel: React.FC<ImagePanelProps> = (props) => {
       const data = event.data as ImageRenderWorkerEvent;
       if (data.type === 'metrics') {
         setMetrics(data.metrics);
+        return;
+      }
+      if (data.type === 'rendered') {
+        setRenderedAnnotationState(data.annotationState);
+        if (data.annotationState === 'gap') setAnnotationGap(true);
         return;
       }
       if (data.type !== 'status') {
@@ -211,25 +231,111 @@ export const ImagePanel: React.FC<ImagePanelProps> = (props) => {
     };
   }, [formatMessage]);
 
-  // High-frequency image frames bypass messageBus. Still images/raw frames use
-  // latest-only; ordered video codecs use mode=all from registration and bootstrap
-  // the nearest decodable GOP before accepting live delta frames.
+  // Keep image and annotation delivery together. Frames wait for the exact annotation log-time
+  // key, or for a later annotation to prove that the key is a real data gap.
   useEffect(() => {
-    if (!topic) {
-      return;
-    }
+    if (!topic) return;
     const worker = workerRef.current;
-    if (!worker) {
-      return;
-    }
+    if (!worker) return;
 
     videoOrderedModeRef.current = false;
     videoBootstrapInFlightRef.current = false;
     videoBootstrapGenerationRef.current += 1;
     videoBufferedLiveRef.current = [];
     consumerModeRef.current = 'latest';
+    const pairer = selectedAnnotationTopic ? new FrameAnnotationPairer() : null;
+    let active = true;
+
+    let annotationRangeScheduled = false;
+    const resolvePendingAnnotations = () => {
+      if (
+        !pairer ||
+        !player.getMessagesInTimeRange ||
+        annotationRangeScheduled ||
+        annotationRangeAbortRef.current
+      ) {
+        return;
+      }
+      annotationRangeScheduled = true;
+      queueMicrotask(() => {
+        if (!active) return;
+        annotationRangeScheduled = false;
+        const range = pairer.pendingRange();
+        if (!range || annotationRangeAbortRef.current) return;
+        const controller = new AbortController();
+        annotationRangeAbortRef.current = controller;
+        let completed = false;
+        void player
+          .getMessagesInTimeRange!({
+            start: fromNano(range.startNs),
+            end: fromNano(range.endNs),
+            topics: [selectedAnnotationTopic],
+          })
+          .then((messages) => {
+            if (!active || controller.signal.aborted) return;
+            for (const event of messages) deliverPairs(pairer.pushAnnotation(event));
+            deliverPairs(pairer.confirmThrough(range.endNs));
+            completed = true;
+          })
+          .catch((error: unknown) => {
+            if (!controller.signal.aborted) {
+              console.warn('ImagePanel: annotation range read failed', error);
+            }
+          })
+          .finally(() => {
+            if (annotationRangeAbortRef.current === controller) {
+              annotationRangeAbortRef.current = null;
+            }
+            if (active && completed && pairer.pendingFrameCount > 0) {
+              resolvePendingAnnotations();
+            }
+          });
+      });
+    };
+    frameAnnotationPairerRef.current = pairer;
+    setAnnotationGap(false);
+    setAnnotationWaiting(false);
+    setRenderedAnnotationState('disabled');
     setMetrics(null);
     worker.postMessage({ type: 'reset' } satisfies ImageRenderWorkerRequest);
+
+    const deliverPairs = (pairs: ImageFrameAnnotationPair[]) => {
+      if (pairs.some((pair) => pair.annotation === null)) setAnnotationGap(true);
+      for (const pair of pairs) postImageFrame(worker, pair.frame, pair.annotation);
+      setAnnotationWaiting((pairer?.pendingFrameCount ?? 0) > 0);
+    };
+    deliverAnnotationPairsRef.current = deliverPairs;
+
+    const handleVideoFrame = (event: RosMessageEvent) => {
+      if (videoBootstrapInFlightRef.current) {
+        videoBufferedLiveRef.current.push(event);
+        return;
+      }
+      if (pairer) {
+        deliverPairs(pairer.pushFrame(event));
+        resolvePendingAnnotations();
+      } else {
+        postImageFrame(worker, event);
+      }
+    };
+
+    const dispatchHighFrequencyBatch = (messages: RosMessageEvent[]) => {
+      for (const event of messages) {
+        if (isVideoMessageEvent(event)) handleVideoFrame(event);
+        else postImageFrame(worker, event);
+      }
+    };
+
+    if (pairer) {
+      player.registerHighFrequencyConsumer(annotationConsumerId, {
+        topic: selectedAnnotationTopic,
+        lane: 'video',
+        mode: 'all',
+        onMessageBatch: (messages) => {
+          for (const event of messages) deliverPairs(pairer.pushAnnotation(event));
+        },
+      });
+    }
 
     const initialOrdered = topicNeedsOrderedVideoFrames(topicSchema);
     if (initialOrdered) {
@@ -237,33 +343,13 @@ export const ImagePanel: React.FC<ImagePanelProps> = (props) => {
       consumerModeRef.current = 'all';
     }
 
-    const handleVideoFrame = (event: RosMessageEvent) => {
-      if (videoBootstrapInFlightRef.current) {
-        videoBufferedLiveRef.current.push(event);
-        return;
-      }
-      postImageFrame(worker, event);
-    };
-
-    const dispatchHighFrequencyBatch = (messages: RosMessageEvent[]) => {
-      for (const event of messages) {
-        if (isVideoMessageEvent(event)) {
-          handleVideoFrame(event);
-        } else {
-          postImageFrame(worker, event);
-        }
-      }
-    };
-
-    const runBootstrap = async (
-      targetTime: ReturnType<Player['getCurrentTime']>,
-      preserveFrame: boolean,
-    ) => {
-      if (!targetTime) {
-        return false;
-      }
-      const generation = videoBootstrapGenerationRef.current;
+    const runBootstrap = async (targetTime: Time | undefined, preserveFrame: boolean) => {
+      if (!targetTime) return false;
+      const generation = videoBootstrapGenerationRef.current + 1;
+      videoBootstrapGenerationRef.current = generation;
+      const bootstrapLiveEvents = [...videoBufferedLiveRef.current];
       videoBootstrapInFlightRef.current = true;
+      if (selectedAnnotationTopic) setAnnotationWaiting(true);
       videoSeekRepairAbortRef.current?.abort();
       const controller = new AbortController();
       videoSeekRepairAbortRef.current = controller;
@@ -274,41 +360,51 @@ export const ImagePanel: React.FC<ImagePanelProps> = (props) => {
           worker,
           topic,
           targetTime,
-          codec: videoBufferedLiveRef.current.map(videoCodecForMessageEvent).find(Boolean) ?? undefined,
-          liveEvents: videoBufferedLiveRef.current,
+          codec: bootstrapLiveEvents.map(videoCodecForMessageEvent).find(Boolean) ?? undefined,
+          liveEvents: bootstrapLiveEvents,
           signal: controller.signal,
           preserveFrame,
+          annotationTopic: selectedAnnotationTopic || undefined,
+          onAnnotationGap: () => setAnnotationGap(true),
         });
         if (controller.signal.aborted || generation !== videoBootstrapGenerationRef.current) {
           return false;
         }
-        if (success) {
-          videoBufferedLiveRef.current = [];
+        if (!success) {
+          setAnnotationWaiting(false);
+          return false;
         }
-        return success;
+        const targetNs = toNano(targetTime);
+        const trailingLiveEvents = videoBufferedLiveRef.current
+          .slice(bootstrapLiveEvents.length)
+          .filter((event) => toNano(event.receiveTime) > targetNs);
+        videoBufferedLiveRef.current = [];
+        setAnnotationWaiting(false);
+        for (const event of trailingLiveEvents) {
+          if (pairer) deliverPairs(pairer.pushFrame(event));
+          else postImageFrame(worker, event);
+        }
+        resolvePendingAnnotations();
+        return true;
       } finally {
-        if (generation === videoBootstrapGenerationRef.current) {
+        if (
+          generation === videoBootstrapGenerationRef.current &&
+          videoSeekRepairAbortRef.current === controller
+        ) {
           videoBootstrapInFlightRef.current = false;
-        }
-        if (videoSeekRepairAbortRef.current === controller) {
           videoSeekRepairAbortRef.current = null;
         }
       }
     };
+    runVideoBootstrapRef.current = runBootstrap;
 
     const activateVideoOrderedMode = async (triggerMessage?: RosMessageEvent) => {
       if (videoOrderedModeRef.current) {
-        if (triggerMessage) {
-          handleVideoFrame(triggerMessage);
-        }
+        if (triggerMessage) handleVideoFrame(triggerMessage);
         return;
       }
-
       videoOrderedModeRef.current = true;
-      if (triggerMessage) {
-        videoBufferedLiveRef.current.push(triggerMessage);
-      }
-
+      if (triggerMessage) videoBufferedLiveRef.current.push(triggerMessage);
       if (consumerModeRef.current !== 'all') {
         consumerModeRef.current = 'all';
         player.unregisterHighFrequencyConsumer(imageConsumerId);
@@ -319,11 +415,8 @@ export const ImagePanel: React.FC<ImagePanelProps> = (props) => {
           onMessageBatch: dispatchHighFrequencyBatch,
         });
       }
-
       const currentTime = player.getCurrentTime();
-      if (currentTime) {
-        await runBootstrap(currentTime, false);
-      }
+      if (currentTime) await runBootstrap(currentTime, false);
     };
 
     const handleMessage = (message: RosMessageEvent) => {
@@ -335,7 +428,7 @@ export const ImagePanel: React.FC<ImagePanelProps> = (props) => {
         handleVideoFrame(message);
         return;
       }
-      postImageFrame(worker, message);
+      handleVideoFrame(message);
     };
 
     if (consumerModeRef.current === 'all') {
@@ -346,9 +439,7 @@ export const ImagePanel: React.FC<ImagePanelProps> = (props) => {
         onMessageBatch: dispatchHighFrequencyBatch,
       });
       const currentTime = player.getCurrentTime();
-      if (currentTime) {
-        void runBootstrap(currentTime, false);
-      }
+      if (currentTime) void runBootstrap(currentTime, false);
     } else {
       player.registerHighFrequencyConsumer(imageConsumerId, {
         topic,
@@ -356,27 +447,37 @@ export const ImagePanel: React.FC<ImagePanelProps> = (props) => {
         mode: 'latest',
         onLatestMessage: handleMessage,
         onMessageBatch: (messages) => {
-          if (videoOrderedModeRef.current) {
-            return;
-          }
+          if (videoOrderedModeRef.current) return;
           const latest = messages.at(-1);
-          if (latest) {
-            handleMessage(latest);
-          }
+          if (latest) handleMessage(latest);
         },
       });
     }
 
     return () => {
+      active = false;
       videoBootstrapGenerationRef.current += 1;
       videoSeekRepairAbortRef.current?.abort();
       videoSeekRepairAbortRef.current = null;
       videoBufferedLiveRef.current = [];
       videoBootstrapInFlightRef.current = false;
+      frameAnnotationPairerRef.current = null;
+      deliverAnnotationPairsRef.current = null;
+      runVideoBootstrapRef.current = null;
       player.unregisterHighFrequencyConsumer(imageConsumerId);
+      if (pairer) player.unregisterHighFrequencyConsumer(annotationConsumerId);
+      annotationRangeAbortRef.current?.abort();
+      annotationRangeAbortRef.current = null;
       worker.postMessage({ type: 'reset' } satisfies ImageRenderWorkerRequest);
     };
-  }, [imageConsumerId, player, topic, topicSchema]);
+  }, [
+    annotationConsumerId,
+    imageConsumerId,
+    player,
+    selectedAnnotationTopic,
+    topic,
+    topicSchema,
+  ]);
 
   useEffect(() => {
     return () => {
@@ -385,35 +486,31 @@ export const ImagePanel: React.FC<ImagePanelProps> = (props) => {
     };
   }, [player, topic]);
 
-  // Keep annotation delivery on the video lane. The worker selects the
-  // closest publish-time match before drawing over each image frame.
-  useEffect(() => {
-    const worker = workerRef.current;
-    if (!selectedAnnotationTopic || !worker) return;
-
-    player.registerHighFrequencyConsumer(annotationConsumerId, {
-      topic: selectedAnnotationTopic,
-      lane: 'video',
-      mode: 'all',
-      onMessageBatch: (messages) => {
-        for (const event of messages) {
-          const overlay = parseImageAnnotations(event.message);
-          if (overlay) {
-            worker.postMessage({ type: 'overlay', overlay } satisfies ImageRenderWorkerRequest);
-          }
+  useEffect(
+    () =>
+      player.subscribeSeek((time) => {
+        frameAnnotationPairerRef.current?.reset();
+        videoBufferedLiveRef.current = [];
+        setAnnotationGap(false);
+        annotationRangeAbortRef.current?.abort();
+        annotationRangeAbortRef.current = null;
+        setAnnotationWaiting(selectedAnnotationTopic.length > 0);
+        const worker = workerRef.current;
+        if (worker && topic && videoOrderedModeRef.current) {
+          void runVideoBootstrapRef.current?.(time, true);
+        } else {
+          worker?.postMessage({
+            type: 'reset',
+            preserveFrame: true,
+          } satisfies ImageRenderWorkerRequest);
         }
-      },
-    });
-
-    return () => {
-      player.unregisterHighFrequencyConsumer(annotationConsumerId);
-      worker.postMessage({ type: 'overlay', overlay: null } satisfies ImageRenderWorkerRequest);
-    };
-  }, [annotationConsumerId, player, selectedAnnotationTopic]);
+      }),
+    [player, selectedAnnotationTopic, topic],
+  );
 
 
-  // Keep the worker's media deadline current. On rewind, rebuild H.264 state
-  // from the nearest complete random-access point.
+
+  // Keep the worker's media deadline current without routing playback ticks through React state.
   useEffect(() => {
     return player.subscribeCurrentTime((time) => {
       workerRef.current?.postMessage({
@@ -421,81 +518,8 @@ export const ImagePanel: React.FC<ImagePanelProps> = (props) => {
         currentTime: time,
         isPlaying,
       } satisfies ImageRenderWorkerRequest);
-      const nowNs = toNano(time);
-      const previousNs = lastPlaybackTimeNsRef.current;
-      if (previousNs !== nowNs) {
-        seekRepairGenerationRef.current += 1;
-      }
-      if (previousNs != null && nowNs + 5_000_000n < previousNs) {
-        const repairGeneration = seekRepairGenerationRef.current;
-        const worker = workerRef.current;
-        const stillImageTopic = worker && topic && !videoOrderedModeRef.current ? topic : null;
-        videoSeekRepairAbortRef.current?.abort();
-        videoSeekRepairAbortRef.current = null;
-        if (worker && topic && videoOrderedModeRef.current) {
-          videoBootstrapInFlightRef.current = true;
-          videoBufferedLiveRef.current = [];
-          const generation = videoBootstrapGenerationRef.current;
-          const controller = new AbortController();
-          videoSeekRepairAbortRef.current = controller;
-          void (async () => {
-            try {
-              const success = await executeVideoBootstrap({
-                player,
-                worker,
-                topic,
-                targetTime: time,
-                codec: videoBufferedLiveRef.current.map(videoCodecForMessageEvent).find(Boolean) ?? undefined,
-                liveEvents: videoBufferedLiveRef.current,
-                signal: controller.signal,
-                preserveFrame: true,
-              });
-              if (
-                success &&
-                !controller.signal.aborted &&
-                generation === videoBootstrapGenerationRef.current
-              ) {
-                videoBufferedLiveRef.current = [];
-              }
-            } finally {
-              if (generation === videoBootstrapGenerationRef.current) {
-                videoBootstrapInFlightRef.current = false;
-              }
-              if (videoSeekRepairAbortRef.current === controller) {
-                videoSeekRepairAbortRef.current = null;
-              }
-            }
-          })();
-        } else {
-          worker?.postMessage({ type: 'reset' } satisfies ImageRenderWorkerRequest);
-        }
-        const repairTopics = new Set<string>();
-        if (stillImageTopic) repairTopics.add(stillImageTopic);
-        if (repairTopics.size > 0 && player.getMessagesInTimeRange) {
-          void player.getMessagesInTimeRange({
-            start: addMs(time, -2000),
-            end: time,
-            topics: [...repairTopics],
-          }).then((messages) => {
-            if (seekRepairGenerationRef.current !== repairGeneration) return;
-            let latestImage: RosMessageEvent | undefined;
-            for (const event of messages) {
-              if (
-                stillImageTopic &&
-                event.topic === stillImageTopic &&
-                toNano(event.receiveTime) <= nowNs &&
-                (!latestImage || toNano(event.receiveTime) > toNano(latestImage.receiveTime))
-              ) {
-                latestImage = event;
-              }
-            }
-            if (worker && latestImage) postImageFrame(worker, latestImage);
-          });
-        }
-      }
-      lastPlaybackTimeNsRef.current = nowNs;
     });
-  }, [isPlaying, player, topic]);
+  }, [isPlaying, player]);
 
   // Send color/depth decode options when they change — triggers immediate redraw in worker
   useEffect(() => {
@@ -548,6 +572,9 @@ export const ImagePanel: React.FC<ImagePanelProps> = (props) => {
       data-video-media-lag-ms={metrics?.mediaLagMs}
       data-video-resync-count={metrics?.resyncCount}
       data-video-rendered-frames={metrics?.renderedFrames}
+      data-annotation-state={
+        selectedAnnotationTopic && annotationWaiting ? 'buffering' : renderedAnnotationState
+      }
     >
       <PanelTopicBar className="border-zinc-800 bg-zinc-950">
         <TopicQuickPicker
@@ -571,6 +598,19 @@ export const ImagePanel: React.FC<ImagePanelProps> = (props) => {
         {showStatusText && statusText && (
           <div className="absolute inset-0 flex items-center justify-center pointer-events-none text-white/40 italic text-xs">
             {statusText}
+          </div>
+        )}
+        {annotationWaiting && (
+          <div className="absolute top-1 left-1 rounded border border-border bg-card/90 px-2 py-1 text-[10px] text-muted-foreground">
+            {formatMessage({ id: 'panels.image.status.waitingForAnnotation' })}
+          </div>
+        )}
+        {annotationGap && (
+          <div
+            className="absolute top-1 right-1 rounded border border-border bg-card/90 px-2 py-1 text-[10px] text-amber-600"
+            data-testid="image-annotation-gap-warning"
+          >
+            {formatMessage({ id: 'panels.image.warning.annotationGap' })}
           </div>
         )}
         {showStatusText && status.phase === 'ready' && status.width && status.height && (
@@ -609,13 +649,16 @@ function isUiStatusEqual(a: ImageSurfaceStatus, b: ImageSurfaceStatus): boolean 
   );
 }
 
-function postImageFrame(worker: Worker, messageEvent: RosMessageEvent): void {
+function postImageFrame(
+  worker: Worker,
+  messageEvent: RosMessageEvent,
+  annotation?: ImageAnnotationsFrame | null,
+): void {
   // High-frequency consumers receive a payload dedicated to this consumer, so
   // a full-span ArrayBuffer can be handed directly to the render worker.
   const next = toWorkerFrame(messageEvent, { transferOwnership: true });
-  if (!next) {
-    return;
-  }
+  if (!next) return;
+  next.frame.annotation = annotation;
   worker.postMessage(
     { type: 'frame', frame: next.frame } satisfies ImageRenderWorkerRequest,
     next.transfer,

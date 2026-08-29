@@ -1,5 +1,7 @@
 {
   "panels.image.defaultTitle": "Image",
+  "panels.image.warning.annotationGap": "Some video frames have no matching annotation data.",
+  "panels.image.status.waitingForAnnotation": "Buffering until the matching annotation is ready…",
   "panels.plot.defaultTitle": "Plot",
   "panels.plot.toolbar.selectTopic": "Select topic…",
   "panels.plot.toolbar.resetZoom": "Reset zoom",

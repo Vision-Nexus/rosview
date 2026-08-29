@@ -1,12 +1,14 @@
 import type { Player } from '@/core/types/player';
 import type { MessageEvent as RosMessageEvent, Time } from '@/core/types/ros';
 import { addMs, toNano } from '@/shared/utils/time';
+import type { ImageAnnotationsFrame } from './imageAnnotations';
 import type { ImageRenderWorkerRequest, ImageWorkerFrameEnvelope } from './imageWorkerProtocol';
 import {
   getVideoMessagePayload,
   toWorkerFrame,
   videoCodecForMessageEvent,
 } from './messageFrameAdapter';
+import { parseExactImageAnnotations } from './frameAnnotationPairer';
 import {
   type VideoCodec,
   containsVideoRandomAccessNal,
@@ -140,12 +142,16 @@ function dedupeVideoEvents(messages: RosMessageEvent[]): RosMessageEvent[] {
 function toWorkerFramesFromEvents(
   events: RosMessageEvent[],
   transferOwnership: boolean,
+  annotationsByFrameKey?: ReadonlyMap<bigint, ImageAnnotationsFrame | null>,
 ): { frames: ImageWorkerFrameEnvelope[]; transfer: Transferable[] } {
   const frames: ImageWorkerFrameEnvelope[] = [];
   const transfer: Transferable[] = [];
   for (const event of events) {
     const prepared = toWorkerFrame(event, { transferOwnership });
     if (!prepared) continue;
+    if (annotationsByFrameKey) {
+      prepared.frame.annotation = annotationsByFrameKey.get(toNano(event.receiveTime)) ?? null;
+    }
     frames.push(prepared.frame);
     transfer.push(...prepared.transfer);
   }
@@ -156,24 +162,43 @@ async function fetchVideoBootstrapFrames(
   player: Player,
   topic: string,
   targetTime: Time,
-  options: { signal?: AbortSignal; coverageEndTime?: Time; codec?: VideoCodec } = {},
-): Promise<{ codec: VideoCodec; events: RosMessageEvent[] } | null> {
+  options: {
+    signal?: AbortSignal;
+    coverageEndTime?: Time;
+    codec?: VideoCodec;
+    annotationTopic?: string;
+  } = {},
+): Promise<{
+  codec: VideoCodec;
+  events: RosMessageEvent[];
+  annotationsByFrameKey: Map<bigint, ImageAnnotationsFrame | null> | undefined;
+} | null> {
   if (!player.getMessagesInTimeRange || options.signal?.aborted) return null;
   const coverageEnd = options.coverageEndTime ?? targetTime;
   const queryEnd = addMs(coverageEnd, VIDEO_BOOTSTRAP_FORWARD_MS);
+  const topics = options.annotationTopic ? [topic, options.annotationTopic] : [topic];
   for (const windowMs of VIDEO_SEEK_WINDOWS_MS) {
-    const messages = (await player.getMessagesInTimeRange({
+    const messages = await player.getMessagesInTimeRange({
       start: addMs(targetTime, -windowMs),
       end: queryEnd,
-      topics: [topic],
-    })).filter((event) => event.topic === topic);
+      topics,
+    });
     if (options.signal?.aborted) return null;
-    const codec = options.codec ?? messages.map(videoCodecForMessageEvent).find(Boolean) ?? null;
+    const videoMessages = messages.filter((event) => event.topic === topic);
+    const codec = options.codec ?? videoMessages.map(videoCodecForMessageEvent).find(Boolean) ?? null;
     if (!codec) continue;
-    const events = selectVideoBootstrapFrames(messages, targetTime, codec, {
+    const events = selectVideoBootstrapFrames(videoMessages, targetTime, codec, {
       coverageEndTime: coverageEnd,
     });
-    if (events.length > 0) return { codec, events };
+    if (events.length === 0) continue;
+    const annotationsByFrameKey = options.annotationTopic
+      ? new Map(
+          messages
+            .filter((event) => event.topic === options.annotationTopic)
+            .map((event) => [toNano(event.receiveTime), parseExactImageAnnotations(event)]),
+        )
+      : undefined;
+    return { codec, events, annotationsByFrameKey };
   }
   return null;
 }
@@ -188,6 +213,10 @@ export interface ExecuteVideoBootstrapArgs {
   signal?: AbortSignal;
   preserveFrame?: boolean;
   transferOwnership?: boolean;
+  /** Optional ImageAnnotations topic paired by the authoritative MCAP log-time key. */
+  annotationTopic?: string;
+  /** Called when the visible bootstrap frame has no exact annotation record. */
+  onAnnotationGap?: () => void;
 }
 
 /** Fetch, merge, validate, and post one atomic H.264 or H.265 bootstrap batch. */
@@ -203,22 +232,34 @@ export async function executeVideoBootstrap(args: ExecuteVideoBootstrapArgs): Pr
     transferOwnership = false,
   } = args;
   if (signal?.aborted) return false;
-  const liveCodec = args.codec ?? liveEvents.map(videoCodecForMessageEvent).find(Boolean) ?? undefined;
-  const coverageEnd = maxVideoMessageReceiveTime(liveEvents, liveCodec) ?? targetTime;
+  const bootstrapLiveEvents = [...liveEvents];
+  const liveCodec =
+    args.codec ?? bootstrapLiveEvents.map(videoCodecForMessageEvent).find(Boolean) ?? undefined;
+  const coverageEnd = maxVideoMessageReceiveTime(bootstrapLiveEvents, liveCodec) ?? targetTime;
   const bootstrap = await fetchVideoBootstrapFrames(player, topic, targetTime, {
     signal,
     coverageEndTime: coverageEnd,
     codec: liveCodec,
+    annotationTopic: args.annotationTopic,
   });
   if (!bootstrap || signal?.aborted) return false;
   const merged = dedupeVideoEvents(
     sortByReceiveTime([
       ...bootstrap.events,
-      ...liveEvents.filter((event) => videoCodecForMessageEvent(event) === bootstrap.codec),
+      ...bootstrapLiveEvents.filter(
+        (event) => videoCodecForMessageEvent(event) === bootstrap.codec,
+      ),
     ]),
   );
-  const prepared = toWorkerFramesFromEvents(merged, transferOwnership);
+  const prepared = toWorkerFramesFromEvents(
+    merged,
+    transferOwnership,
+    bootstrap.annotationsByFrameKey,
+  );
   if (!preparedBootstrapContainsRandomAccess(prepared.frames, bootstrap.codec)) return false;
+  if (args.annotationTopic && prepared.frames.at(-1)?.annotation === null) {
+    args.onAnnotationGap?.();
+  }
   worker.postMessage(
     {
       type: 'bootstrapVideo',

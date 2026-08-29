@@ -170,6 +170,7 @@ export class IterablePlayer implements Player {
   private _prefetchRequestId = 0;
   private _lastPlaybackBufferRequestMs = Number.NEGATIVE_INFINITY;
   private _timeSubscribers = new Set<(time: Time) => void>();
+  private _seekSubscribers = new Set<(time: Time) => void>();
   private _rafId: number | undefined;
   private _lastPipelineEmitMs = 0;
   private _loadProgressPollId: ReturnType<typeof globalThis.setInterval> | undefined;
@@ -207,6 +208,14 @@ export class IterablePlayer implements Player {
       this._timeSubscribers.delete(cb);
     };
   }
+
+  subscribeSeek(cb: (time: Time) => void): () => void {
+    this._seekSubscribers.add(cb);
+    return () => {
+      this._seekSubscribers.delete(cb);
+    };
+  }
+
 
   getCurrentTime(): Time | undefined {
     return this._state.presence === "closed" ? undefined : this._currentTime;
@@ -529,6 +538,7 @@ export class IterablePlayer implements Player {
     this._clock.seek(seekTime, now);
     this._lastTickWallMs = now;
     this._topicLastMessageNs.clear();
+    this._notifySeekSubscribers(seekTime);
     this._notifyTimeSubscribers(seekTime);
     this._lastPipelineEmitMs = 0;
     this._emitState();
@@ -595,6 +605,7 @@ export class IterablePlayer implements Player {
       this._currentTime = this._clampToRange(msg.receiveTime);
       this._clock.seek(this._currentTime, performance.now());
       this._topicLastMessageNs.clear();
+      this._notifySeekSubscribers(this._currentTime);
       this._distributeMessages([msg], this._currentTime);
       this._notifyTimeSubscribers(this._currentTime);
       this._lastPipelineEmitMs = 0;
@@ -654,6 +665,8 @@ export class IterablePlayer implements Player {
     this._initialization = undefined;
     this._clock = new PlaybackClock();
     this._topicLastMessageNs.clear();
+    this._timeSubscribers.clear();
+    this._seekSubscribers.clear();
     this._highFrequencyConsumersById.clear();
     this._highFrequencyConsumersByTopic.clear();
     this._emitState();
@@ -727,6 +740,11 @@ export class IterablePlayer implements Player {
       cb(time);
     }
   }
+
+  private _notifySeekSubscribers(time: Time): void {
+    for (const cb of this._seekSubscribers) cb(time);
+  }
+
 
   /**
    * Replace activeData only when slow metadata changes.
@@ -1025,6 +1043,7 @@ export class IterablePlayer implements Player {
         }
         // Match seek: notify rewind first so H264 panels can reset/wait for IDR
         // before backfill or live frames arrive after configure().
+        this._notifySeekSubscribers(this._currentTime);
         this._notifyTimeSubscribers(this._currentTime);
         const topics = this._currentTopics();
         if (topics.length > 0) {

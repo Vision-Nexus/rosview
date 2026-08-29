@@ -12,6 +12,13 @@ export const MCAP_3CAM = path.join(EXAMPLES_DIR, 'test_3cam.mcap');
 export const MCAP_H264 = path.join(EXAMPLES_DIR, 'test_h264.mcap');
 export const MCAP_H265 = path.join(EXAMPLES_DIR, 'test_h265.mcap');
 export const MCAP_COMPRESSED_DEPTH = path.join(EXAMPLES_DIR, 'test_compressed_depth.mcap');
+export const MCAP_H264_PAIR_CAMERAS = Array.from({ length: 5 }, (_, camera) =>
+  path.join(EXAMPLES_DIR, `test_h264_pair_camera${camera}.mcap`),
+);
+export const MCAP_H264_PAIR_ANNOTATIONS = path.join(
+  EXAMPLES_DIR,
+  'test_h264_pair_annotations.mcap',
+);
 export const HDF5_MINIMAL = path.join(EXAMPLES_DIR, 'test_minimal.hdf5');
 export const BVH_MINIMAL = path.join(EXAMPLES_DIR, 'test_minimal.bvh');
 
