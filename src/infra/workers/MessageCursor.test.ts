@@ -191,6 +191,38 @@ describe('MessageCursor', () => {
     await cursor.end();
   });
 
+  it('returns an end-time stashed message through next()', async () => {
+    let nextSec = 0;
+    const pendingTail = deferred<IteratorResult<MessageEvent>>();
+    const iterator: AsyncIterableIterator<MessageEvent> = {
+      async next() {
+        if (nextSec < 2) {
+          const value = message(nextSec);
+          nextSec += 1;
+          return { done: false, value };
+        }
+        return await pendingTail.promise;
+      },
+      [Symbol.asyncIterator]() {
+        return this;
+      },
+    };
+    const cursor = new MessageCursor(iterator, {
+      mode: 'comlink',
+      binaryPayloadThresholdBytes: 64 * 1024,
+    });
+    await flushAsyncWork();
+
+    await expect(cursor.nextBatch(10_000, { endTime: { sec: 0, nsec: 0 } })).resolves.toHaveLength(1);
+    await expect(cursor.next()).resolves.toMatchObject({
+      done: false,
+      value: { receiveTime: { sec: 1, nsec: 0 } },
+    });
+
+    pendingTail.resolve({ done: true, value: undefined });
+    await cursor.end();
+  });
+
   it('backpressures the pump at its configured duration cap', async () => {
     let calls = 0;
     const iterator: AsyncIterableIterator<MessageEvent> = {

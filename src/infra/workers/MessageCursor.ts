@@ -73,7 +73,7 @@ export class MessageCursor implements IMessageCursor<unknown> {
     if (this._pumpError) {
       throw toThrownError(this._pumpError);
     }
-    const nextMessage = this._dequeue();
+    const nextMessage = this._takeNextQueuedMessage();
     if (!nextMessage) {
       return { done: true, value: undefined };
     }
@@ -209,7 +209,7 @@ export class MessageCursor implements IMessageCursor<unknown> {
   }
 
   private async _waitForQueue(timeoutMs?: number): Promise<void> {
-    if (this._queue.length > 0 || this._done || this._closed || this._pumpError) {
+    if (this._pendingMessage || this._queue.length > 0 || this._done || this._closed || this._pumpError) {
       return;
     }
     await new Promise<void>((resolve) => {

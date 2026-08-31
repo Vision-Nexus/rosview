@@ -132,10 +132,13 @@ test('five H.264 panels render only exact paired annotations', async ({ page }) 
     .toEqual(Array.from({ length: 5 }, () => 'matched'));
   await expect(page.getByTestId('image-annotation-gap-warning')).toHaveCount(0);
 
+  await page.getByTestId('playback-loop-trigger').click();
+  await page.getByTestId('playback-loop-option-loop').click();
   await page.getByTestId('playback-speed-trigger').click();
   await page.getByRole('menuitem', { name: '8x', exact: true }).click();
   const resume = page.getByRole('button', { name: 'Play playback' });
   if (await resume.isVisible().catch(() => false)) await resume.click();
+  // The fixture spans five seconds; at 8x this crosses at least one loop boundary.
   await page.waitForTimeout(1_500);
   await expect
     .poll(
