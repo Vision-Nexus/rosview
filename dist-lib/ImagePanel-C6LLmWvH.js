@@ -1,12 +1,12 @@
 import { f as e, i as t, t as n } from "./rafScheduler-BAifbkGY.js";
 import { t as r } from "./TopicQuickPicker-C_vPX9PS.js";
 import { t as i } from "./PanelTopicBar-D_5QBK11.js";
-import { _ as a, c as o, d as s, g as c, h as l, l as u, m as d, n as f, o as p, p as m, r as ee, v as h, y as g } from "./imageAnnotations-DXWYifIU.js";
-import { a as te, o as _, t as v } from "./time-BoEDgjoH.js";
-import { useEffect as y, useRef as b, useState as x } from "react";
-import { jsx as S, jsxs as ne } from "react/jsx-runtime";
+import { _ as a, c as o, d as s, g as c, h as l, l as u, m as d, n as f, o as p, p as m, r as h, v as g, y as _ } from "./imageAnnotations-DXWYifIU.js";
+import { a as ee, o as v, t as y } from "./time-BoEDgjoH.js";
+import { useEffect as b, useRef as x, useState as S } from "react";
+import { jsx as C, jsxs as te } from "react/jsx-runtime";
 //#region src/features/panels/Image/core/messageFrameAdapter.ts
-function C(e, t = {}) {
+function w(e, t = {}) {
 	let n = e.message;
 	if (u(n)) {
 		let r = m(n.data, t);
@@ -40,27 +40,27 @@ function C(e, t = {}) {
 	}
 	return null;
 }
-function w(e) {
-	let t = e.message;
-	return u(t) ? h(o(t)) : null;
-}
-function re(e) {
-	return w(e) !== null;
-}
 function T(e) {
 	let t = e.message;
-	return u(t) && h(t.format) ? t.data : null;
+	return u(t) ? g(o(t)) : null;
+}
+function ne(e) {
+	return T(e) !== null;
+}
+function E(e) {
+	let t = e.message;
+	return u(t) && g(t.format) ? t.data : null;
 }
 //#endregion
 //#region src/features/panels/Image/core/frameAnnotationPairer.ts
-function E(e) {
-	let t = _(e.receiveTime), n = f(e.message, t);
+function D(e) {
+	let t = v(e.receiveTime), n = f(e.message, t);
 	return n ? {
 		...n,
 		timestampNs: t
 	} : null;
 }
-var D = 120, O = 67108864, ie = 512, ae = class {
+var O = 120, k = 67108864, A = 512, re = class {
 	#e = /* @__PURE__ */ new Map();
 	#t = /* @__PURE__ */ new Map();
 	#n = null;
@@ -72,14 +72,14 @@ var D = 120, O = 67108864, ie = 512, ae = class {
 	#c;
 	#l;
 	#u;
-	constructor(e = D, t = O, n = ie) {
+	constructor(e = O, t = k, n = A) {
 		if (!Number.isInteger(e) || e < 1) throw Error("maxPendingFrames must be a positive integer");
 		if (!Number.isInteger(t) || t < 1) throw Error("maxPendingBytes must be a positive integer");
 		if (!Number.isInteger(n) || n < 1) throw Error("maxPendingAnnotations must be a positive integer");
 		this.#c = e, this.#l = t, this.#u = n;
 	}
 	pushFrame(e) {
-		let t = _(e.receiveTime);
+		let t = v(e.receiveTime);
 		if (this.#r === null || t > this.#r) {
 			this.#r = t;
 			for (let e of this.#e.keys()) e < t && this.#e.delete(e);
@@ -93,12 +93,12 @@ var D = 120, O = 67108864, ie = 512, ae = class {
 			frame: e,
 			annotation: null
 		}];
-		let n = this.#t.get(t) ?? [], r = oe(e);
-		return n.push(r), this.#t.set(t, n), this.#i += 1, this.#a += k(r), this.#p(), [];
+		let n = this.#t.get(t) ?? [], r = ie(e);
+		return n.push(r), this.#t.set(t, n), this.#i += 1, this.#a += j(r), this.#p(), [];
 	}
 	pushAnnotation(e) {
-		let t = _(e.receiveTime), n = E(e);
-		return this.#e.set(t, n), (this.#n === null || t > this.#n) && (this.#n = t), this.#m(), [...this.#d(t, n), ...this.#f()].sort(A);
+		let t = v(e.receiveTime), n = D(e);
+		return this.#e.set(t, n), (this.#n === null || t > this.#n) && (this.#n = t), this.#m(), [...this.#d(t, n), ...this.#f()].sort(M);
 	}
 	get pendingFrameCount() {
 		return this.#i;
@@ -122,7 +122,7 @@ var D = 120, O = 67108864, ie = 512, ae = class {
 	}
 	#d(e, t) {
 		let n = this.#t.get(e);
-		return n ? (this.#t.delete(e), this.#i -= n.length, this.#a -= n.reduce((e, t) => e + k(t), 0), n.map((e) => ({
+		return n ? (this.#t.delete(e), this.#i -= n.length, this.#a -= n.reduce((e, t) => e + j(t), 0), n.map((e) => ({
 			frame: e,
 			annotation: t
 		}))) : [];
@@ -135,13 +135,13 @@ var D = 120, O = 67108864, ie = 512, ae = class {
 		if (e === null) return [];
 		let t = [];
 		for (let [n, r] of this.#t) if (!(n > e)) {
-			this.#t.delete(n), this.#i -= r.length, this.#a -= r.reduce((e, t) => e + k(t), 0);
+			this.#t.delete(n), this.#i -= r.length, this.#a -= r.reduce((e, t) => e + j(t), 0);
 			for (let e of r) t.push({
 				frame: e,
 				annotation: null
 			});
 		}
-		return t.sort(A);
+		return t.sort(M);
 	}
 	#p() {
 		for (; this.#i > this.#c || this.#a > this.#l;) {
@@ -152,7 +152,7 @@ var D = 120, O = 67108864, ie = 512, ae = class {
 				this.#t.delete(t);
 				continue;
 			}
-			--this.#i, this.#a -= k(r), this.#o += 1, n.length === 0 && this.#t.delete(t);
+			--this.#i, this.#a -= j(r), this.#o += 1, n.length === 0 && this.#t.delete(t);
 		}
 	}
 	#m() {
@@ -161,11 +161,11 @@ var D = 120, O = 67108864, ie = 512, ae = class {
 			if (e === void 0) return;
 			this.#e.delete(e);
 			let t = this.#t.get(e);
-			t && (this.#t.delete(e), this.#i -= t.length, this.#a -= t.reduce((e, t) => e + k(t), 0), this.#o += t.length), (this.#s === null || e > this.#s) && (this.#s = e);
+			t && (this.#t.delete(e), this.#i -= t.length, this.#a -= t.reduce((e, t) => e + j(t), 0), this.#o += t.length), (this.#s === null || e > this.#s) && (this.#s = e);
 		}
 	}
 };
-function oe(e) {
+function ie(e) {
 	let t = e.message;
 	if (typeof t != "object" || !t || !("data" in t)) return e;
 	let n = t.data;
@@ -179,27 +179,27 @@ function oe(e) {
 		}
 	};
 }
-function k(e) {
+function j(e) {
 	let t = e.message;
 	if (typeof t != "object" || !t || !("data" in t)) return 0;
 	let n = t.data;
 	return ArrayBuffer.isView(n) || n instanceof ArrayBuffer ? n.byteLength : 0;
 }
-function A(e, t) {
-	let n = _(e.frame.receiveTime) - _(t.frame.receiveTime);
+function M(e, t) {
+	let n = v(e.frame.receiveTime) - v(t.frame.receiveTime);
 	return n < 0n ? -1 : +(n > 0n);
 }
 //#endregion
 //#region src/features/panels/Image/core/videoQueue.ts
-function j(e, t, n = [], r = !1) {
-	let i = se(e, t);
+function ae(e, t, n = [], r = !1) {
+	let i = oe(e, t);
 	if (i < 0) return {
 		frames: [...t],
 		droppedFrames: 0,
 		resync: !1
 	};
 	if (i === 0) return r ? {
-		frames: g(e, t[0].data) ? [...t] : [...n, ...t],
+		frames: _(e, t[0].data) ? [...t] : [...n, ...t],
 		droppedFrames: 0,
 		resync: !0
 	} : {
@@ -207,7 +207,7 @@ function j(e, t, n = [], r = !1) {
 		droppedFrames: 0,
 		resync: !1
 	};
-	let o = a(e, t[i].data), s = e === "h264" ? o.includes(7) : o.includes(32) || o.includes(33), c = s ? [] : M(e, t, i), l = [...s || c.length > 0 ? c : [...n], ...t.slice(i)], u = i - c.length;
+	let o = a(e, t[i].data), s = e === "h264" ? o.includes(7) : o.includes(32) || o.includes(33), c = s ? [] : se(e, t, i), l = [...s || c.length > 0 ? c : [...n], ...t.slice(i)], u = i - c.length;
 	return u === 0 ? {
 		frames: [...t],
 		droppedFrames: 0,
@@ -218,11 +218,11 @@ function j(e, t, n = [], r = !1) {
 		resync: !0
 	};
 }
-function se(e, t) {
+function oe(e, t) {
 	for (let n = t.length - 1; n >= 0; --n) if (l(e, t[n].data)) return n;
 	return -1;
 }
-function M(e, t, n) {
+function se(e, t, n) {
 	let r = -1;
 	for (let i = n - 1; i >= 0; --i) {
 		let n = t[i];
@@ -249,7 +249,7 @@ var ce = [
 	3e4
 ], le = 2e3;
 function N(e, t) {
-	let n = _(e.receiveTime) - _(t.receiveTime);
+	let n = v(e.receiveTime) - v(t.receiveTime);
 	return n < 0n ? -1 : +(n > 0n);
 }
 function P(e) {
@@ -258,30 +258,30 @@ function P(e) {
 function F(e, t) {
 	let n;
 	for (let r of e) {
-		let e = w(r);
-		!e || t && e !== t || (!n || _(r.receiveTime) > _(n)) && (n = r.receiveTime);
+		let e = T(r);
+		!e || t && e !== t || (!n || v(r.receiveTime) > v(n)) && (n = r.receiveTime);
 	}
 	return n;
 }
 function I(e, t) {
 	for (let n of P(e)) {
-		if (w(n) !== t) continue;
-		let e = T(n);
+		if (T(n) !== t) continue;
+		let e = E(n);
 		if (e && l(t, e)) return n.receiveTime;
 	}
 }
 function L(e, t) {
-	return e.some((e) => e.kind === "compressed" && h(e.format) === t && l(t, e.data));
+	return e.some((e) => e.kind === "compressed" && g(e.format) === t && l(t, e.data));
 }
 function R(e, t, n) {
-	let r = _(t), i = P(e.filter((e) => w(e) === n && _(e.receiveTime) <= r)).flatMap((e) => {
-		let t = T(e);
+	let r = v(t), i = P(e.filter((e) => T(e) === n && v(e.receiveTime) <= r)).flatMap((e) => {
+		let t = E(e);
 		return t ? [{
 			event: e,
 			data: t
 		}] : [];
 	});
-	return i.some(({ data: e }) => l(n, e)) ? B(n, j(n, i).frames).map(({ event: e }) => e) : [];
+	return i.some(({ data: e }) => l(n, e)) ? B(n, ae(n, i).frames).map(({ event: e }) => e) : [];
 }
 function z(e, t, n, r = {}) {
 	let i = R(e, t, n);
@@ -292,7 +292,7 @@ function z(e, t, n, r = {}) {
 		r.coverageEndTime ?? t,
 		t,
 		a
-	].map(_).reduce((e, t) => t > e ? t : e);
+	].map(v).reduce((e, t) => t > e ? t : e);
 	return R(e, {
 		sec: Number(o / 1000000000n),
 		nsec: Number(o % 1000000000n)
@@ -305,7 +305,7 @@ function B(e, t) {
 function V(e) {
 	let t = /* @__PURE__ */ new Set();
 	return e.filter((e) => {
-		let n = T(e), r = 2166136261;
+		let n = E(e), r = 2166136261;
 		if (n) for (let e of n) r = Math.imul(r ^ e, 16777619) >>> 0;
 		let i = `${e.receiveTime.sec}:${e.receiveTime.nsec}:${e.publishTime.sec}:${e.publishTime.nsec}:${n?.byteLength ?? 0}:${r}`;
 		return !t.has(i) && (t.add(i), !0);
@@ -314,8 +314,8 @@ function V(e) {
 function H(e, t, n) {
 	let r = [], i = [];
 	for (let a of e) {
-		let e = C(a, { transferOwnership: t });
-		e && (n && (e.frame.annotation = n.get(_(a.receiveTime)) ?? null), r.push(e.frame), i.push(...e.transfer));
+		let e = w(a, { transferOwnership: t });
+		e && (n && (e.frame.annotation = n.get(v(a.receiveTime)) ?? null), r.push(e.frame), i.push(...e.transfer));
 	}
 	return {
 		frames: r,
@@ -324,21 +324,21 @@ function H(e, t, n) {
 }
 async function U(e, t, n, r = {}) {
 	if (!e.getMessagesInTimeRange || r.signal?.aborted) return null;
-	let i = r.coverageEndTime ?? n, a = v(i, le), o = r.annotationTopic ? [t, r.annotationTopic] : [t];
+	let i = r.coverageEndTime ?? n, a = y(i, le), o = r.annotationTopic ? [t, r.annotationTopic] : [t];
 	for (let s of ce) {
 		let c = await e.getMessagesInTimeRange({
-			start: v(n, -s),
+			start: y(n, -s),
 			end: a,
 			topics: o
 		});
 		if (r.signal?.aborted) return null;
-		let l = c.filter((e) => e.topic === t), u = r.codec ?? l.map(w).find(Boolean) ?? null;
+		let l = c.filter((e) => e.topic === t), u = r.codec ?? l.map(T).find(Boolean) ?? null;
 		if (!u) continue;
 		let d = z(l, n, u, { coverageEndTime: i });
 		if (d.length !== 0) return {
 			codec: u,
 			events: d,
-			annotationsByFrameKey: r.annotationTopic ? new Map(c.filter((e) => e.topic === r.annotationTopic).map((e) => [_(e.receiveTime), E(e)])) : void 0
+			annotationsByFrameKey: r.annotationTopic ? new Map(c.filter((e) => e.topic === r.annotationTopic).map((e) => [v(e.receiveTime), D(e)])) : void 0
 		};
 	}
 	return null;
@@ -346,14 +346,14 @@ async function U(e, t, n, r = {}) {
 async function ue(e) {
 	let { player: t, worker: n, topic: r, targetTime: i, liveEvents: a = [], signal: o, preserveFrame: s = !1, transferOwnership: c = !1 } = e;
 	if (o?.aborted) return !1;
-	let l = [...a], u = e.codec ?? l.map(w).find(Boolean) ?? void 0, d = await U(t, r, i, {
+	let l = [...a], u = e.codec ?? l.map(T).find(Boolean) ?? void 0, d = await U(t, r, i, {
 		signal: o,
 		coverageEndTime: F(l, u) ?? i,
 		codec: u,
 		annotationTopic: e.annotationTopic
 	});
 	if (!d || o?.aborted) return !1;
-	let f = H(V(P([...d.events, ...l.filter((e) => w(e) === d.codec)])), c, d.annotationsByFrameKey);
+	let f = H(V(P([...d.events, ...l.filter((e) => T(e) === d.codec)])), c, d.annotationsByFrameKey);
 	return L(f.frames, d.codec) ? (e.annotationTopic && f.frames.at(-1)?.annotation === null && e.onAnnotationGap?.(), n.postMessage({
 		type: "bootstrapVideo",
 		codec: d.codec,
@@ -396,8 +396,8 @@ function fe(e) {
 	};
 }
 var K = (a) => {
-	let { formatMessage: o } = e(), s = t((e) => e.playerState.activeData?.isPlaying ?? !1), { player: c, panelId: l, setConfig: u, topic: f, annotationTopic: m, annotationVisible: h, backgroundColor: g, showStatusText: v, fitMode: C, flipHorizontal: T, flipVertical: E, rotation: D, smoothing: O, colorMode: ie, colorMap: oe, gradient: k, flatColor: A, explicitAlpha: j, minValue: se, maxValue: M } = a, ce = b(null), le = b(null), N = b(null), P = b(null), F = b(null), I = b({ phase: "idle" }), L = b(null), R = b(!1), z = b(!1), B = b(0), V = b([]), H = b("latest"), U = b(null), W = b(null), G = b(null), [K, he] = x({ phase: "idle" }), [J, ge] = x(null), [_e, Y] = x(!1), X = b(null), [ve, Z] = x(!1), [ye, be] = x("disabled"), Q = `${l}:image-main`, xe = `${l}:image-annotations`, $ = h ? m.trim() : "", Se = t((e) => e.playerState.activeData?.topics.find((e) => e.name === f)?.type ?? "");
-	y(() => {
+	let { formatMessage: o } = e(), s = t((e) => e.playerState.activeData?.isPlaying ?? !1), { player: c, panelId: l, setConfig: u, topic: f, annotationTopic: m, annotationVisible: g, backgroundColor: _, showStatusText: y, fitMode: w, flipHorizontal: E, flipVertical: D, rotation: O, smoothing: k, colorMode: A, colorMap: ie, gradient: j, flatColor: M, explicitAlpha: ae, minValue: oe, maxValue: se } = a, ce = x(null), le = x(null), N = x(null), P = x(null), F = x(null), I = x({ phase: "idle" }), L = x(null), R = x(!1), z = x(!1), B = x(0), V = x([]), H = x("latest"), U = x(null), W = x(null), G = x(null), [K, he] = S({ phase: "idle" }), [J, ge] = S(null), [_e, Y] = S(!1), [ve, X] = S(!1), Z = x(null), [ye, be] = S("disabled"), Q = `${l}:image-main`, xe = `${l}:image-annotations`, $ = g ? m.trim() : "", Se = t((e) => e.playerState.activeData?.topics.find((e) => e.name === f)?.type ?? "");
+	b(() => {
 		let e = ce.current, t = le.current;
 		if (!e || !t) return;
 		if (typeof e.transferControlToOffscreen != "function") {
@@ -453,138 +453,145 @@ var K = (a) => {
 				e && (e.postMessage({ type: "dispose" }), e.terminate(), N.current = null, F.current = null, I.current = { phase: "idle" }, he({ phase: "idle" }), ge(null), P.current = null);
 			}, 0);
 		};
-	}, [o]), y(() => {
+	}, [o]), b(() => {
 		if (!f) return;
 		let e = N.current;
 		if (!e) return;
 		R.current = !1, z.current = !1, B.current += 1, V.current = [], H.current = "latest";
-		let t = $ ? new ae() : null, n = !0, r = !1, i = () => {
-			!t || !c.getMessagesInTimeRange || r || X.current || (r = !0, queueMicrotask(() => {
-				if (!n) return;
-				r = !1;
-				let e = t.pendingRange();
-				if (!e || X.current) return;
-				let o = new AbortController();
-				X.current = o;
-				let s = !1;
-				c.getMessagesInTimeRange({
-					start: te(e.startNs),
-					end: te(e.endNs),
-					topics: [$]
-				}).then((r) => {
-					if (!(!n || o.signal.aborted)) {
-						for (let e of r) a(t.pushAnnotation(e));
-						a(t.confirmThrough(e.endNs)), s = !0;
-					}
-				}).catch((e) => {
-					o.signal.aborted || console.warn("ImagePanel: annotation range read failed", e);
-				}).finally(() => {
-					X.current === o && (X.current = null), n && s && t.pendingFrameCount > 0 && i();
-				});
-			}));
-		};
-		U.current = t, Y(!1), Z(!1), be("disabled"), ge(null), e.postMessage({ type: "reset" });
-		let a = (n) => {
+		let t = $ ? new re() : null, n = !0, r, i, a = !1, o = !1, s = 0;
+		U.current = t, Y(!1), X(!1), be("disabled"), ge(null), e.postMessage({ type: "reset" });
+		let l = (n) => {
 			n.some((e) => e.annotation === null) && Y(!0);
 			for (let t of n) q(e, t.frame, t.annotation);
-			Z((t?.pendingFrameCount ?? 0) > 0);
+			X((t?.pendingFrameCount ?? 0) > 0), u();
 		};
-		W.current = a;
-		let o = (n) => {
+		function u() {
+			let e = t, d = c.getMessagesInTimeRange?.bind(c), f = e?.pendingRange();
+			if (!e || !d || !f || r !== void 0 || a || o) return;
+			let p = f.startNs, m = s;
+			r = window.setTimeout(() => {
+				if (r = void 0, !n || m !== s || a) return;
+				let t = e?.pendingRange();
+				if (!t || t.startNs !== p) {
+					u();
+					return;
+				}
+				a = !0;
+				let c = new AbortController();
+				i = c, d({
+					start: ee(t.startNs),
+					end: ee(t.endNs),
+					topics: [$]
+				}).then((r) => {
+					if (!(!n || c.signal.aborted || m !== s)) {
+						for (let t of r) l(e.pushAnnotation(t));
+						l(e.confirmThrough(t.endNs));
+					}
+				}).catch((e) => {
+					!c.signal.aborted && m === s && (o = !0, console.warn("ImagePanel: exceptional annotation gap read failed", e));
+				}).finally(() => {
+					m === s && (i === c && (i = void 0), a = !1, n && !o && u());
+				});
+			}, 250);
+		}
+		Z.current = () => {
+			s += 1, r !== void 0 && (window.clearTimeout(r), r = void 0), i?.abort(), i = void 0, a = !1, o = !1;
+		}, W.current = l;
+		let p = (n) => {
 			if (z.current) {
 				V.current.push(n);
 				return;
 			}
-			t ? (a(t.pushFrame(n)), i()) : q(e, n);
-		}, s = (t) => {
-			for (let n of t) re(n) ? o(n) : q(e, n);
+			t ? l(t.pushFrame(n)) : q(e, n);
+		}, m = (t) => {
+			for (let n of t) ne(n) ? p(n) : q(e, n);
 		};
 		t && c.registerHighFrequencyConsumer(xe, {
 			topic: $,
 			lane: "video",
 			mode: "all",
 			onMessageBatch: (e) => {
-				for (let n of e) a(t.pushAnnotation(n));
+				for (let n of e) l(t.pushAnnotation(n));
 			}
 		}), d(Se) && (R.current = !0, H.current = "all");
-		let l = async (n, r) => {
+		let h = async (n, r) => {
 			if (!n) return !1;
-			let o = B.current + 1;
-			B.current = o;
-			let s = [...V.current];
-			z.current = !0, $ && Z(!0), L.current?.abort();
-			let l = new AbortController();
-			L.current = l;
+			let i = B.current + 1;
+			B.current = i;
+			let a = [...V.current];
+			z.current = !0, $ && X(!0), L.current?.abort();
+			let o = new AbortController();
+			L.current = o;
 			try {
-				let u = await ue({
+				let s = await ue({
 					player: c,
 					worker: e,
 					topic: f,
 					targetTime: n,
-					codec: s.map(w).find(Boolean) ?? void 0,
-					liveEvents: s,
-					signal: l.signal,
+					codec: a.map(T).find(Boolean) ?? void 0,
+					liveEvents: a,
+					signal: o.signal,
 					preserveFrame: r,
 					annotationTopic: $ || void 0,
 					onAnnotationGap: () => Y(!0)
 				});
-				if (l.signal.aborted || o !== B.current) return !1;
-				if (!u) return Z(!1), !1;
-				let d = _(n), p = V.current.slice(s.length).filter((e) => _(e.receiveTime) > d);
-				V.current = [], Z(!1);
-				for (let n of p) t ? a(t.pushFrame(n)) : q(e, n);
-				return i(), !0;
+				if (o.signal.aborted || i !== B.current) return !1;
+				if (!s) return X(!1), !1;
+				let u = v(n), d = V.current.slice(a.length).filter((e) => v(e.receiveTime) > u);
+				V.current = [], X(!1);
+				for (let n of d) t ? l(t.pushFrame(n)) : q(e, n);
+				return !0;
 			} finally {
-				o === B.current && L.current === l && (z.current = !1, L.current = null);
+				i === B.current && L.current === o && (z.current = !1, L.current = null);
 			}
 		};
-		G.current = l;
-		let u = async (e) => {
+		G.current = h;
+		let g = async (e) => {
 			if (R.current) {
-				e && o(e);
+				e && p(e);
 				return;
 			}
 			R.current = !0, e && V.current.push(e), H.current !== "all" && (H.current = "all", c.unregisterHighFrequencyConsumer(Q), c.registerHighFrequencyConsumer(Q, {
 				topic: f,
 				lane: "video",
 				mode: "all",
-				onMessageBatch: s
+				onMessageBatch: m
 			}));
 			let t = c.getCurrentTime();
-			t && await l(t, !1);
-		}, p = (e) => {
-			if (re(e)) {
+			t && await h(t, !1);
+		}, _ = (e) => {
+			if (ne(e)) {
 				if (!R.current) {
-					u(e);
+					g(e);
 					return;
 				}
-				o(e);
+				p(e);
 				return;
 			}
-			o(e);
+			p(e);
 		};
 		if (H.current === "all") {
 			c.registerHighFrequencyConsumer(Q, {
 				topic: f,
 				lane: "video",
 				mode: "all",
-				onMessageBatch: s
+				onMessageBatch: m
 			});
 			let e = c.getCurrentTime();
-			e && l(e, !1);
+			e && h(e, !1);
 		} else c.registerHighFrequencyConsumer(Q, {
 			topic: f,
 			lane: "video",
 			mode: "latest",
-			onLatestMessage: p,
+			onLatestMessage: _,
 			onMessageBatch: (e) => {
 				if (R.current) return;
 				let t = e.at(-1);
-				t && p(t);
+				t && _(t);
 			}
 		});
 		return () => {
-			n = !1, B.current += 1, L.current?.abort(), L.current = null, V.current = [], z.current = !1, U.current = null, W.current = null, G.current = null, c.unregisterHighFrequencyConsumer(Q), t && c.unregisterHighFrequencyConsumer(xe), X.current?.abort(), X.current = null, e.postMessage({ type: "reset" });
+			n = !1, Z.current?.(), Z.current = null, B.current += 1, L.current?.abort(), L.current = null, V.current = [], z.current = !1, U.current = null, W.current = null, G.current = null, c.unregisterHighFrequencyConsumer(Q), t && c.unregisterHighFrequencyConsumer(xe), e.postMessage({ type: "reset" });
 		};
 	}, [
 		xe,
@@ -593,10 +600,10 @@ var K = (a) => {
 		$,
 		f,
 		Se
-	]), y(() => () => {
+	]), b(() => () => {
 		L.current?.abort(), L.current = null;
-	}, [c, f]), y(() => c.subscribeSeek((e) => {
-		U.current?.reset(), V.current = [], Y(!1), X.current?.abort(), X.current = null, Z($.length > 0);
+	}, [c, f]), b(() => c.subscribeSeek((e) => {
+		U.current?.reset(), V.current = [], Y(!1), X($.length > 0), Z.current?.();
 		let t = N.current;
 		t && f && R.current ? G.current?.(e, !0) : t?.postMessage({
 			type: "reset",
@@ -606,59 +613,59 @@ var K = (a) => {
 		c,
 		$,
 		f
-	]), y(() => c.subscribeCurrentTime((e) => {
+	]), b(() => c.subscribeCurrentTime((e) => {
 		N.current?.postMessage({
 			type: "playback",
 			currentTime: e,
 			isPlaying: s
 		});
-	}), [s, c]), y(() => {
+	}), [s, c]), b(() => {
 		let e = N.current;
 		e && e.postMessage({
 			type: "rawDecodeOptions",
 			options: fe({
-				colorMode: ie,
-				colorMap: oe,
-				gradient: k,
-				flatColor: A,
-				explicitAlpha: j,
-				minValue: se,
-				maxValue: M
+				colorMode: A,
+				colorMap: ie,
+				gradient: j,
+				flatColor: M,
+				explicitAlpha: ae,
+				minValue: oe,
+				maxValue: se
 			})
 		});
 	}, [
-		ie,
-		oe,
-		k,
 		A,
+		ie,
 		j,
-		se,
-		M
-	]), y(() => {
+		M,
+		ae,
+		oe,
+		se
+	]), b(() => {
 		let e = {
-			backgroundColor: g,
-			flipHorizontal: T,
-			flipVertical: E,
-			rotationDeg: D,
-			smoothing: O,
-			fitMode: C
+			backgroundColor: _,
+			flipHorizontal: E,
+			flipVertical: D,
+			rotationDeg: O,
+			smoothing: k,
+			fitMode: w
 		};
 		N.current?.postMessage({
 			type: "renderOptions",
 			options: e
 		});
 	}, [
-		g,
-		T,
+		_,
 		E,
 		D,
 		O,
-		C
+		k,
+		w
 	]);
 	let Ce = pe(K);
-	return /* @__PURE__ */ ne("div", {
+	return /* @__PURE__ */ te("div", {
 		className: "flex flex-col h-full overflow-hidden relative",
-		style: { background: g },
+		style: { background: _ },
 		"data-testid": "image-panel",
 		"data-video-codec": J?.codec,
 		"data-video-pressure": J?.pressureMode,
@@ -669,39 +676,39 @@ var K = (a) => {
 		"data-video-resync-count": J?.resyncCount,
 		"data-video-rendered-frames": J?.renderedFrames,
 		"data-annotation-state": $ && ve ? "buffering" : ye,
-		children: [/* @__PURE__ */ S(i, {
+		children: [/* @__PURE__ */ C(i, {
 			className: "border-zinc-800 bg-zinc-950",
-			children: /* @__PURE__ */ S(r, {
+			children: /* @__PURE__ */ C(r, {
 				value: f,
-				onChange: (e) => u((t) => ee(e, t)),
+				onChange: (e) => u((t) => h(e, t)),
 				typeIncludes: [...p],
 				placeholder: o({ id: "panels.framework.topicPicker.imagePlaceholder" }),
 				className: "min-w-0 flex-1",
 				triggerClassName: "border-zinc-700 bg-zinc-950 text-zinc-100 hover:bg-zinc-900 hover:text-zinc-50"
 			})
-		}), /* @__PURE__ */ ne("div", {
+		}), /* @__PURE__ */ te("div", {
 			ref: le,
 			className: "flex-1 relative min-h-0 min-w-0 flex items-center justify-center",
 			children: [
-				/* @__PURE__ */ S("canvas", {
+				/* @__PURE__ */ C("canvas", {
 					ref: ce,
 					className: "w-full h-full block",
 					"data-testid": "image-panel-canvas"
 				}),
-				v && Ce && /* @__PURE__ */ S("div", {
+				y && Ce && /* @__PURE__ */ C("div", {
 					className: "absolute inset-0 flex items-center justify-center pointer-events-none text-white/40 italic text-xs",
 					children: Ce
 				}),
-				ve && /* @__PURE__ */ S("div", {
+				ve && /* @__PURE__ */ C("div", {
 					className: "absolute top-1 left-1 rounded border border-border bg-card/90 px-2 py-1 text-[10px] text-muted-foreground",
 					children: o({ id: "panels.image.status.waitingForAnnotation" })
 				}),
-				_e && /* @__PURE__ */ S("div", {
+				_e && /* @__PURE__ */ C("div", {
 					className: "absolute top-1 right-1 rounded border border-border bg-card/90 px-2 py-1 text-[10px] text-amber-600",
 					"data-testid": "image-annotation-gap-warning",
 					children: o({ id: "panels.image.warning.annotationGap" })
 				}),
-				v && K.phase === "ready" && K.width && K.height && /* @__PURE__ */ ne("div", {
+				y && K.phase === "ready" && K.width && K.height && /* @__PURE__ */ te("div", {
 					className: "absolute bottom-0 left-0 right-0 px-2 py-1 text-white/30 text-[10px] font-mono truncate pointer-events-none",
 					"data-testid": "image-panel-status",
 					children: [
@@ -723,7 +730,7 @@ function me(e, t) {
 	return e.phase === t.phase && e.width === t.width && e.height === t.height && e.encoding === t.encoding && e.message === t.message;
 }
 function q(e, t, n) {
-	let r = C(t, { transferOwnership: !0 });
+	let r = w(t, { transferOwnership: !0 });
 	r && (r.frame.annotation = n, e.postMessage({
 		type: "frame",
 		frame: r.frame

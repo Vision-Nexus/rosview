@@ -100,8 +100,9 @@ export const ImagePanel: React.FC<ImagePanelProps> = (props) => {
   const [status, setStatus] = useState<ImageSurfaceStatus>({ phase: 'idle' });
   const [metrics, setMetrics] = useState<ImageRenderMetrics | null>(null);
   const [annotationGap, setAnnotationGap] = useState(false);
-  const annotationRangeAbortRef = useRef<AbortController | null>(null);
   const [annotationWaiting, setAnnotationWaiting] = useState(false);
+  const resetAnnotationFallbackRef = useRef<(() => void) | null>(null);
+
   const [renderedAnnotationState, setRenderedAnnotationState] = useState<
     'disabled' | 'matched' | 'gap'
   >('disabled');
@@ -245,53 +246,12 @@ export const ImagePanel: React.FC<ImagePanelProps> = (props) => {
     consumerModeRef.current = 'latest';
     const pairer = selectedAnnotationTopic ? new FrameAnnotationPairer() : null;
     let active = true;
+    let annotationFallbackTimer: number | undefined;
+    let annotationFallbackAbort: AbortController | undefined;
+    let annotationFallbackInFlight = false;
+    let annotationFallbackFailed = false;
+    let annotationFallbackGeneration = 0;
 
-    let annotationRangeScheduled = false;
-    const resolvePendingAnnotations = () => {
-      if (
-        !pairer ||
-        !player.getMessagesInTimeRange ||
-        annotationRangeScheduled ||
-        annotationRangeAbortRef.current
-      ) {
-        return;
-      }
-      annotationRangeScheduled = true;
-      queueMicrotask(() => {
-        if (!active) return;
-        annotationRangeScheduled = false;
-        const range = pairer.pendingRange();
-        if (!range || annotationRangeAbortRef.current) return;
-        const controller = new AbortController();
-        annotationRangeAbortRef.current = controller;
-        let completed = false;
-        void player
-          .getMessagesInTimeRange!({
-            start: fromNano(range.startNs),
-            end: fromNano(range.endNs),
-            topics: [selectedAnnotationTopic],
-          })
-          .then((messages) => {
-            if (!active || controller.signal.aborted) return;
-            for (const event of messages) deliverPairs(pairer.pushAnnotation(event));
-            deliverPairs(pairer.confirmThrough(range.endNs));
-            completed = true;
-          })
-          .catch((error: unknown) => {
-            if (!controller.signal.aborted) {
-              console.warn('ImagePanel: annotation range read failed', error);
-            }
-          })
-          .finally(() => {
-            if (annotationRangeAbortRef.current === controller) {
-              annotationRangeAbortRef.current = null;
-            }
-            if (active && completed && pairer.pendingFrameCount > 0) {
-              resolvePendingAnnotations();
-            }
-          });
-      });
-    };
     frameAnnotationPairerRef.current = pairer;
     setAnnotationGap(false);
     setAnnotationWaiting(false);
@@ -303,7 +263,83 @@ export const ImagePanel: React.FC<ImagePanelProps> = (props) => {
       if (pairs.some((pair) => pair.annotation === null)) setAnnotationGap(true);
       for (const pair of pairs) postImageFrame(worker, pair.frame, pair.annotation);
       setAnnotationWaiting((pairer?.pendingFrameCount ?? 0) > 0);
+      scheduleExceptionalAnnotationFallback();
     };
+
+    function scheduleExceptionalAnnotationFallback() {
+      const annotationPairer = pairer;
+      const readAnnotationRange = player.getMessagesInTimeRange?.bind(player);
+      const pendingRange = annotationPairer?.pendingRange();
+      if (
+        !annotationPairer ||
+        !readAnnotationRange ||
+        !pendingRange ||
+        annotationFallbackTimer !== undefined ||
+        annotationFallbackInFlight ||
+        annotationFallbackFailed
+      ) {
+        return;
+      }
+      const pendingStartNs = pendingRange.startNs;
+      const generation = annotationFallbackGeneration;
+      annotationFallbackTimer = window.setTimeout(() => {
+        annotationFallbackTimer = undefined;
+        if (!active || generation !== annotationFallbackGeneration || annotationFallbackInFlight) return;
+        const range = annotationPairer?.pendingRange();
+        // A healthy merged batch resolves the old key before this delay. Re-arm for the new key
+        // without I/O; only a sustained same oldest key is an exceptional data gap.
+        if (!range || range.startNs !== pendingStartNs) {
+          scheduleExceptionalAnnotationFallback();
+          return;
+        }
+
+        annotationFallbackInFlight = true;
+        const controller = new AbortController();
+        annotationFallbackAbort = controller;
+        void readAnnotationRange({
+          start: fromNano(range.startNs),
+          end: fromNano(range.endNs),
+          topics: [selectedAnnotationTopic],
+        })
+          .then((messages) => {
+            if (
+              !active ||
+              controller.signal.aborted ||
+              generation !== annotationFallbackGeneration
+            ) {
+              return;
+            }
+            for (const event of messages) deliverPairs(annotationPairer.pushAnnotation(event));
+            deliverPairs(annotationPairer.confirmThrough(range.endNs));
+          })
+          .catch((error: unknown) => {
+            if (!controller.signal.aborted && generation === annotationFallbackGeneration) {
+              annotationFallbackFailed = true;
+              console.warn('ImagePanel: exceptional annotation gap read failed', error);
+            }
+          })
+          .finally(() => {
+            if (generation !== annotationFallbackGeneration) return;
+            if (annotationFallbackAbort === controller) annotationFallbackAbort = undefined;
+            annotationFallbackInFlight = false;
+            if (active && !annotationFallbackFailed) scheduleExceptionalAnnotationFallback();
+          });
+      }, 250);
+    }
+
+    resetAnnotationFallbackRef.current = () => {
+      annotationFallbackGeneration += 1;
+      if (annotationFallbackTimer !== undefined) {
+        window.clearTimeout(annotationFallbackTimer);
+        annotationFallbackTimer = undefined;
+      }
+      annotationFallbackAbort?.abort();
+      annotationFallbackAbort = undefined;
+      annotationFallbackInFlight = false;
+      annotationFallbackFailed = false;
+    };
+
+
     deliverAnnotationPairsRef.current = deliverPairs;
 
     const handleVideoFrame = (event: RosMessageEvent) => {
@@ -312,8 +348,9 @@ export const ImagePanel: React.FC<ImagePanelProps> = (props) => {
         return;
       }
       if (pairer) {
+        // Normal playback waits for the in-stream exact annotation. A sustained pending key is an
+        // exceptional gap and gets one bounded confirmation range read instead of per-frame scans.
         deliverPairs(pairer.pushFrame(event));
-        resolvePendingAnnotations();
       } else {
         postImageFrame(worker, event);
       }
@@ -384,7 +421,6 @@ export const ImagePanel: React.FC<ImagePanelProps> = (props) => {
           if (pairer) deliverPairs(pairer.pushFrame(event));
           else postImageFrame(worker, event);
         }
-        resolvePendingAnnotations();
         return true;
       } finally {
         if (
@@ -456,6 +492,8 @@ export const ImagePanel: React.FC<ImagePanelProps> = (props) => {
 
     return () => {
       active = false;
+      resetAnnotationFallbackRef.current?.();
+      resetAnnotationFallbackRef.current = null;
       videoBootstrapGenerationRef.current += 1;
       videoSeekRepairAbortRef.current?.abort();
       videoSeekRepairAbortRef.current = null;
@@ -466,8 +504,6 @@ export const ImagePanel: React.FC<ImagePanelProps> = (props) => {
       runVideoBootstrapRef.current = null;
       player.unregisterHighFrequencyConsumer(imageConsumerId);
       if (pairer) player.unregisterHighFrequencyConsumer(annotationConsumerId);
-      annotationRangeAbortRef.current?.abort();
-      annotationRangeAbortRef.current = null;
       worker.postMessage({ type: 'reset' } satisfies ImageRenderWorkerRequest);
     };
   }, [
@@ -492,9 +528,8 @@ export const ImagePanel: React.FC<ImagePanelProps> = (props) => {
         frameAnnotationPairerRef.current?.reset();
         videoBufferedLiveRef.current = [];
         setAnnotationGap(false);
-        annotationRangeAbortRef.current?.abort();
-        annotationRangeAbortRef.current = null;
         setAnnotationWaiting(selectedAnnotationTopic.length > 0);
+        resetAnnotationFallbackRef.current?.();
         const worker = workerRef.current;
         if (worker && topic && videoOrderedModeRef.current) {
           void runVideoBootstrapRef.current?.(time, true);
