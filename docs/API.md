@@ -71,6 +71,7 @@ All source props may be combined. Duplicates are deduplicated automatically. Fil
 | `requireSource` | `boolean` | `mode !== 'tool'` | When `false`, mounts panels without `url`/`file`. |
 | `chrome` | `'full' \| 'minimal' \| 'panels-only'` | per `mode` | Chrome preset; overridable via `showNavbar` / `showSidebar` / `showPlaybackBar`. |
 | `showNavbar` / `showSidebar` / `showPlaybackBar` | `boolean` | per `chrome` | Explicit chrome toggles. |
+| `showPanelTopicBar` | `boolean` | `true` | Show the topic-picker bar inside panels that provide one (currently Image and Raw Messages). This does not affect Dockview tab headers or close controls. |
 | `hideOpenFileMenus` | `boolean` | `false` | Hide navbar file menus and disable recording drag-and-drop. |
 | `initialLayout` | `FoxgloveLayoutData` | — | Declarative layout applied on mount (before localStorage). |
 | `defaultPanel` | `OpenPanelInput` | — | Single-panel shorthand (ignored when `initialLayout` is set). |

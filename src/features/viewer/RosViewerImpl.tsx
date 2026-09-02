@@ -14,6 +14,7 @@ import { useRecordingSourceActions } from './useRecordingSourceActions';
 import { useOpenFeedback } from './useOpenFeedback';
 import type { RosViewerProps } from './RosViewer.types';
 import { propsSignature, resolveLayoutPersistence } from './rosViewerUtils';
+import { PanelTopicBarVisibilityProvider } from '@/features/panels/framework/PanelTopicBar';
 
 export type { RosViewerProps } from './RosViewer.types';
 
@@ -126,54 +127,56 @@ export const RosViewer: React.FC<RosViewerProps> = (props) => {
   );
 
   const appShellElement = player ? (
-    <AppShell
-      player={player}
-      loadingSourceName={effectiveSourceName}
-      manualOpenHint={manualOpenHint}
-      sourceLoading={sourceLoading}
-      className={props.className}
-      style={props.style}
-      theme={currentTheme}
-      language={currentLanguage}
-      onThemeChange={handleThemeChange}
-      onLanguageChange={handleLanguageChange}
-      showLanguageSwitcher={props.showLanguageSwitcher ?? true}
-      showThemeSwitcher={props.showThemeSwitcher ?? true}
-      showNavbarBrand={props.showNavbarBrand ?? true}
-      navbarBrandLabel={props.navbarBrandLabel}
-      onBrandClick={handleGoHome}
-      preferAutoLayout={props.preferAutoLayout ?? false}
-      preferencePersistence={persistence}
-      datasets={datasets}
-      activeDatasetId={resolvedDatasetId ?? undefined}
-      onDatasetSelect={onDatasetSelect}
-      onAddFilesFromPicker={onAddFilesFromPicker}
-      onOpenDirectory={handleOpenDirectory}
-      onOpenFilePick={() => void handleOpenRecordingFiles()}
-      onOpenTarPick={() => document.getElementById('rosview-inline-tar')?.click()}
-      onLocalTarSelected={handleLocalTarFile}
-      onOpenRemotePrompt={openRemotePrompt}
-      onSubmitRemoteUrl={handleOpenRemoteRecordingUrl}
-      remoteSubmitLoading={remoteUrlBusy}
-      onSelectSample={handleSelectSample}
-      onCancelLoading={handleGoHome}
-      historyItems={historyItems}
-      onReplayHistory={(id) => void handleReplayHistory(id)}
-      onDropRosRecordingFiles={handleDropRosRecordingFiles}
-      extensions={props.extensions}
-      hostContext={props.hostContext}
-      showNavbar={embedChrome.showNavbar}
-      showSidebar={embedChrome.showSidebar}
-      showPlaybackBar={embedChrome.showPlaybackBar}
-      hideOpenFileMenus={props.hideOpenFileMenus ?? false}
-      initialLayout={props.initialLayout}
-      defaultPanel={props.defaultPanel}
-      layoutPersistence={resolvedLayoutPersistence}
-      layoutStorageKey={layoutStorageKey}
-      suppressWelcomePanel={suppressWelcomePanel}
-      onLayoutReady={props.onLayoutReady}
-      initialSidebarTab={props.initialSidebarTab}
-    />
+    <PanelTopicBarVisibilityProvider visible={props.showPanelTopicBar ?? true}>
+      <AppShell
+        player={player}
+        loadingSourceName={effectiveSourceName}
+        manualOpenHint={manualOpenHint}
+        sourceLoading={sourceLoading}
+        className={props.className}
+        style={props.style}
+        theme={currentTheme}
+        language={currentLanguage}
+        onThemeChange={handleThemeChange}
+        onLanguageChange={handleLanguageChange}
+        showLanguageSwitcher={props.showLanguageSwitcher ?? true}
+        showThemeSwitcher={props.showThemeSwitcher ?? true}
+        showNavbarBrand={props.showNavbarBrand ?? true}
+        navbarBrandLabel={props.navbarBrandLabel}
+        onBrandClick={handleGoHome}
+        preferAutoLayout={props.preferAutoLayout ?? false}
+        preferencePersistence={persistence}
+        datasets={datasets}
+        activeDatasetId={resolvedDatasetId ?? undefined}
+        onDatasetSelect={onDatasetSelect}
+        onAddFilesFromPicker={onAddFilesFromPicker}
+        onOpenDirectory={handleOpenDirectory}
+        onOpenFilePick={() => void handleOpenRecordingFiles()}
+        onOpenTarPick={() => document.getElementById('rosview-inline-tar')?.click()}
+        onLocalTarSelected={handleLocalTarFile}
+        onOpenRemotePrompt={openRemotePrompt}
+        onSubmitRemoteUrl={handleOpenRemoteRecordingUrl}
+        remoteSubmitLoading={remoteUrlBusy}
+        onSelectSample={handleSelectSample}
+        onCancelLoading={handleGoHome}
+        historyItems={historyItems}
+        onReplayHistory={(id) => void handleReplayHistory(id)}
+        onDropRosRecordingFiles={handleDropRosRecordingFiles}
+        extensions={props.extensions}
+        hostContext={props.hostContext}
+        showNavbar={embedChrome.showNavbar}
+        showSidebar={embedChrome.showSidebar}
+        showPlaybackBar={embedChrome.showPlaybackBar}
+        hideOpenFileMenus={props.hideOpenFileMenus ?? false}
+        initialLayout={props.initialLayout}
+        defaultPanel={props.defaultPanel}
+        layoutPersistence={resolvedLayoutPersistence}
+        layoutStorageKey={layoutStorageKey}
+        suppressWelcomePanel={suppressWelcomePanel}
+        onLayoutReady={props.onLayoutReady}
+        initialSidebarTab={props.initialSidebarTab}
+      />
+    </PanelTopicBarVisibilityProvider>
   ) : null;
 
   if (!hasSource && !requireSource && player) {

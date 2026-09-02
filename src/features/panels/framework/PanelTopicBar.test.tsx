@@ -4,7 +4,7 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { PanelTopicBar } from './PanelTopicBar';
+import { PanelTopicBar, PanelTopicBarVisibilityProvider } from './PanelTopicBar';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -63,5 +63,40 @@ describe('PanelTopicBar', () => {
     expect(bar.className).not.toContain('border-border');
     expect(bar.className).not.toContain('bg-muted');
     expect(bar.className).toContain('items-center');
+  });
+
+  it('omits the bar and its children when viewer-level visibility is disabled', () => {
+    act(() => {
+      root.render(
+        <PanelTopicBarVisibilityProvider visible={false}>
+          <PanelTopicBar>
+            <button type="button">picker</button>
+          </PanelTopicBar>
+          <button type="button" data-testid="panel-tab-close-button">
+            close
+          </button>
+        </PanelTopicBarVisibilityProvider>,
+      );
+    });
+
+    expect(container.querySelector('[data-testid="panel-topic-bar"]')).toBeNull();
+    expect(container.textContent).not.toContain('picker');
+    expect(container.querySelector('[data-testid="panel-tab-close-button"]')).not.toBeNull();
+  });
+
+  it('responds to viewer-level visibility changes', () => {
+    const renderWithVisibility = (visible: boolean) => (
+      <PanelTopicBarVisibilityProvider visible={visible}>
+        <PanelTopicBar>
+          <button type="button">picker</button>
+        </PanelTopicBar>
+      </PanelTopicBarVisibilityProvider>
+    );
+
+    act(() => root.render(renderWithVisibility(false)));
+    expect(container.querySelector('[data-testid="panel-topic-bar"]')).toBeNull();
+
+    act(() => root.render(renderWithVisibility(true)));
+    expect(container.querySelector('[data-testid="panel-topic-bar"]')).not.toBeNull();
   });
 });

@@ -71,6 +71,7 @@ import '@ioai/rosview/style.css';
 | `requireSource` | `boolean` | `mode !== 'tool'` | 为 `false` 时无 `url`/`file` 仍挂载面板区。 |
 | `chrome` | `'full' \| 'minimal' \| 'panels-only'` | 随 `mode` | Chrome 预设；可被下方细粒度 props 覆盖。 |
 | `showNavbar` / `showSidebar` / `showPlaybackBar` | `boolean` | 随 `chrome` | 显式控制 Navbar、侧栏、播放条。 |
+| `showPanelTopicBar` | `boolean` | `true` | 控制面板内的话题选择栏（目前用于 Image 和 Raw Messages）；不影响 Dockview 标签头或关闭按钮。 |
 | `hideOpenFileMenus` | `boolean` | `false` | 隐藏 Navbar 打开文件菜单并禁用录制文件拖放。 |
 | `initialLayout` | `FoxgloveLayoutData` | — | mount 时优先于 localStorage 的布局。 |
 | `defaultPanel` | `OpenPanelInput` | — | 单面板语法糖（与 `initialLayout` 二选一，后者优先）。 |

@@ -158,6 +158,25 @@ Navbar 左侧默认显示 **ROS View**。嵌入到更大页面时，可以隐藏
 
 ---
 
+## 进阶：隐藏面板话题栏
+
+若嵌入式查看器的布局已经为各面板指定话题，可以移除面板内的话题选择器：
+
+```tsx
+<RosViewer
+  url="https://cdn.example.com/recording.mcap"
+  defaultPanel={{
+    type: 'Image',
+    config: { topic: '/camera/front/image/compressed' },
+  }}
+  showPanelTopicBar={false}
+/>
+```
+
+`showPanelTopicBar` 默认为 `true`。设为 `false` 时，Image 与 Raw Messages 面板不渲染话题选择栏；Dockview 标签头、关闭按钮、面板布局和其他查看器界面保持不变。由于面板内选择器不可用，请通过 `initialLayout` 或 `defaultPanel` 提供面板话题。
+
+---
+
 ## 进阶：受控主题与语言
 
 关闭组件内部的 localStorage 持久化，由宿主应用完全控制状态：
@@ -436,4 +455,3 @@ RosView **不包含**具体业务的标注、质检规则或持久化。宿主�
 1. 在 `RosViewer` 上传入不透明 `hostContext`（例如 `{ datasetId, canAnnotate }`），在扩展里通过 `context.hostContext` 读取。
 2. 使用 `extensions` 实现侧边栏与 `playbackOverlays` / `timelineOverlays`，并结合 `context.playback`、`context.timeline`、`context.messages`。
 3. 将所有 REST、权限与领域模型保留在宿主应用内。
-

@@ -1,6 +1,6 @@
 import { f as e, i as t, t as n } from "./rafScheduler-BAifbkGY.js";
 import { t as r } from "./TopicQuickPicker-C_vPX9PS.js";
-import { t as i } from "./PanelTopicBar-D_5QBK11.js";
+import { t as i } from "./PanelTopicBar-B3NXTKuF.js";
 import { _ as a, c as o, d as s, g as c, h as l, l as u, m as d, n as f, o as p, p as m, r as h, v as g, y as _ } from "./imageAnnotations-DXWYifIU.js";
 import { a as ee, o as v, t as y } from "./time-BoEDgjoH.js";
 import { useEffect as b, useRef as x, useState as S } from "react";

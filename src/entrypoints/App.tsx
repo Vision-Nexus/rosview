@@ -19,15 +19,26 @@ function readSpaUrlFromQuery(): string | undefined {
   return v || undefined;
 }
 
+/** Optional standalone equivalent of the `RosViewer` panel topic bar setting. */
+function readPanelTopicBarVisibilityFromQuery(): boolean | undefined {
+  if (typeof window === 'undefined') return undefined;
+  const value = new URLSearchParams(window.location.search).get('showPanelTopicBar');
+  if (value === 'true') return true;
+  if (value === 'false') return false;
+  return undefined;
+}
+
 function App() {
   const syncLocationSearch = useLocationSearchSync();
   const url = readSpaUrlFromQuery();
+  const showPanelTopicBar = readPanelTopicBarVisibilityFromQuery();
   return (
     <div style={{ width: '100vw', height: '100vh' }}>
       <RosViewer
         url={url}
         urlState="spa"
         preferencePersistence="localStorage"
+        showPanelTopicBar={showPanelTopicBar}
         onSpaUrlQuerySync={syncLocationSearch}
       />
     </div>
