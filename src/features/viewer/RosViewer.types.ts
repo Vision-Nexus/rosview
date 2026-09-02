@@ -82,6 +82,11 @@ export interface RosViewerProps {
   showNavbar?: boolean;
   showSidebar?: boolean;
   showPlaybackBar?: boolean;
+  /**
+   * Whether to show topic-picker bars within Image and Raw Messages panels. Does not affect Dockview tabs.
+   * @default true
+   */
+  showPanelTopicBar?: boolean;
   /** Hide navbar file menus and disable recording drag-and-drop in the workspace. */
   hideOpenFileMenus?: boolean;
   /**

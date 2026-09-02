@@ -12,6 +12,15 @@ async function openFirstTabChromeMenuIfNeeded(page: import('@playwright/test').P
   await moreButton.click();
 }
 
+async function addRawPanelToFirstGroup(page: import('@playwright/test').Page): Promise<void> {
+  await openFirstTabChromeMenuIfNeeded(page);
+  await page.getByTestId('panel-tab-add-button').first().click();
+  const rawPanelType = page.getByRole('menuitem', { name: 'Raw', exact: true });
+  await expect(rawPanelType).toBeVisible();
+  await rawPanelType.hover();
+  await page.getByRole('menuitem', { name: 'Add to tab group', exact: true }).press('Enter');
+}
+
 test.describe('Dockview chrome', () => {
   test.describe.configure({ timeout: 90_000 });
 
@@ -21,6 +30,7 @@ test.describe('Dockview chrome', () => {
 
   test('shows dockview, group add split, and tab close control', async ({ page }) => {
     await openFixtureByUrl(page, MCAP_BASIC_URL);
+    await expect(page.getByTestId('panel-topic-bar').first()).toBeVisible({ timeout: 30_000 });
     await openFirstTabChromeMenuIfNeeded(page);
     await expect(page.getByTestId('panel-tab-add-button').first()).toBeVisible({ timeout: 30_000 });
     await expect(page.getByTestId('panel-tab-close-button').first()).toBeVisible();
@@ -32,15 +42,26 @@ test.describe('Dockview chrome', () => {
     await expect(page.getByTestId('panel-tab-add-button').first()).toBeVisible({ timeout: 30_000 });
 
     const tabsBefore = await page.locator('.dv-tab').count();
-    await page.getByTestId('panel-tab-add-button').first().click();
-    const rawPanelType = page.getByRole('menuitem', { name: 'Raw', exact: true });
-    await expect(rawPanelType).toBeVisible();
-    await rawPanelType.hover();
-    await page.getByRole('menuitem', { name: 'Add to tab group', exact: true }).press('Enter');
+    await addRawPanelToFirstGroup(page);
     await expect(async () => {
       const n = await page.locator('.dv-tab').count();
       expect(n).toBeGreaterThan(tabsBefore);
     }).toPass({ timeout: 15_000, intervals: [200, 500, 1000] });
+  });
+
+  test('hides Image and Raw Messages topic bars without hiding tab close controls', async ({ page }) => {
+    await openFixtureByUrl(page, MCAP_BASIC_URL, {
+      query: { showPanelTopicBar: 'false' },
+    });
+    await expect(page.getByTestId('image-panel').first()).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByTestId('panel-topic-bar')).toHaveCount(0);
+
+    await addRawPanelToFirstGroup(page);
+    await expect(page.getByTestId('raw-messages-panel')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId('panel-topic-bar')).toHaveCount(0);
+
+    await openFirstTabChromeMenuIfNeeded(page);
+    await expect(page.getByTestId('panel-tab-close-button').first()).toBeVisible();
   });
 
   test('tab context menu offers Close', async ({ page }) => {

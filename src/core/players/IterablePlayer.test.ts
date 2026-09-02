@@ -141,6 +141,213 @@ describe('IterablePlayer playback speed', () => {
   });
 });
 
+describe('IterablePlayer render backpressure', () => {
+  function installManualClock() {
+    let now = 0;
+    let nextRafId = 1;
+    const oldPerformanceNow = performance.now;
+    const oldRequestAnimationFrame = globalThis.requestAnimationFrame;
+    const oldCancelAnimationFrame = globalThis.cancelAnimationFrame;
+    const rafCallbacks = new Map<number, FrameRequestCallback>();
+    Object.defineProperty(performance, 'now', {
+      configurable: true,
+      value: () => now,
+    });
+    globalThis.requestAnimationFrame = vi.fn((cb: FrameRequestCallback) => {
+      const id = nextRafId++;
+      rafCallbacks.set(id, cb);
+      return id;
+    });
+    globalThis.cancelAnimationFrame = vi.fn((id: number) => {
+      rafCallbacks.delete(id);
+    });
+    return {
+      setNow(value: number) {
+        now = value;
+      },
+      runNextRaf() {
+        const id = Math.min(...rafCallbacks.keys());
+        const callback = rafCallbacks.get(id);
+        rafCallbacks.delete(id);
+        callback?.(now);
+      },
+      restore() {
+        Object.defineProperty(performance, 'now', {
+          configurable: true,
+          value: oldPerformanceNow,
+        });
+        globalThis.requestAnimationFrame = oldRequestAnimationFrame;
+        globalThis.cancelAnimationFrame = oldCancelAnimationFrame;
+      },
+    };
+  }
+
+  it('freezes the playhead under render pressure and resumes without a time jump', async () => {
+    const clock = installManualClock();
+    const player = new IterablePlayer(makeSource([]));
+    let latestState: PlayerState | undefined;
+    try {
+      player.setListener((state) => {
+        latestState = state;
+      });
+      await player.initialize({});
+      player.updateRenderHealth('image', {
+        topic: TOPIC,
+        visible: true,
+        pending: true,
+        averageFrameIntervalMs: 100,
+      });
+      player.play();
+
+      clock.setNow(1_000);
+      clock.runNextRaf();
+      expect(player.getCurrentTime()).toEqual({ sec: 1, nsec: 0 });
+
+      clock.setNow(1_600);
+      clock.runNextRaf();
+      expect(latestState?.activeData?.isPlaying).toBe(true);
+      expect(latestState?.progress.renderBuffering).toBe(true);
+      expect(latestState?.progress.buffering).toBe(true);
+      expect(player.getCurrentTime()).toEqual({ sec: 1, nsec: 0 });
+
+      clock.setNow(5_000);
+      clock.runNextRaf();
+      expect(player.getCurrentTime()).toEqual({ sec: 1, nsec: 0 });
+
+      player.updateRenderHealth('image', {
+        topic: TOPIC,
+        visible: true,
+        pending: false,
+        renderedTime: { sec: 1, nsec: 0 },
+        averageFrameIntervalMs: 100,
+      });
+      clock.setNow(5_499);
+      clock.runNextRaf();
+      expect(latestState?.progress.renderBuffering).toBe(true);
+
+      clock.setNow(5_500);
+      clock.runNextRaf();
+      expect(latestState?.progress.renderBuffering).toBe(false);
+      expect(player.getCurrentTime()).toEqual({ sec: 1, nsec: 0 });
+
+      clock.setNow(5_600);
+      clock.runNextRaf();
+      expect(player.getCurrentTime()).toEqual({ sec: 1, nsec: 100_000_000 });
+    } finally {
+      player.close();
+      clock.restore();
+    }
+  });
+
+  it('does not automatically resume after a manual pause', async () => {
+    const clock = installManualClock();
+    const player = new IterablePlayer(makeSource([]));
+    let latestState: PlayerState | undefined;
+    try {
+      player.setListener((state) => {
+        latestState = state;
+      });
+      await player.initialize({});
+      player.updateRenderHealth('image', {
+        topic: TOPIC,
+        visible: true,
+        pending: true,
+      });
+      player.play();
+      clock.setNow(1_501);
+      clock.runNextRaf();
+      expect(latestState?.progress.renderBuffering).toBe(true);
+
+      player.pause();
+      player.updateRenderHealth('image', {
+        topic: TOPIC,
+        visible: true,
+        pending: false,
+      });
+      clock.setNow(10_000);
+      expect(latestState?.activeData?.isPlaying).toBe(false);
+      expect(latestState?.progress.renderBuffering).toBe(false);
+      expect(player.getCurrentTime()).toEqual({ sec: 0, nsec: 0 });
+    } finally {
+      player.close();
+      clock.restore();
+    }
+  });
+
+  it('keeps source and render buffering independent', async () => {
+    const clock = installManualClock();
+    const player = new IterablePlayer(makeSource([]));
+    let latestState: PlayerState | undefined;
+    const sourceBufferingControl = player as unknown as {
+      _setSourceBuffering(buffering: boolean, holdClock?: boolean): void;
+    };
+    try {
+      player.setListener((state) => {
+        latestState = state;
+      });
+      await player.initialize({});
+      player.updateRenderHealth('image', {
+        topic: TOPIC,
+        visible: true,
+        pending: true,
+      });
+      player.play();
+      clock.setNow(1_501);
+      clock.runNextRaf();
+      expect(latestState?.progress.renderBuffering).toBe(true);
+
+      sourceBufferingControl._setSourceBuffering(true, true);
+      player.updateRenderHealth('image', {
+        topic: TOPIC,
+        visible: true,
+        pending: false,
+      });
+      clock.setNow(2_001);
+      clock.runNextRaf();
+
+      expect(latestState?.progress.renderBuffering).toBe(false);
+      expect(latestState?.progress.buffering).toBe(true);
+      expect(player.getCurrentTime()).toEqual({ sec: 0, nsec: 0 });
+
+      sourceBufferingControl._setSourceBuffering(false);
+      expect(latestState?.progress.buffering).toBe(false);
+    } finally {
+      player.close();
+      clock.restore();
+    }
+  });
+
+  it('clears stale render health on seek', async () => {
+    const clock = installManualClock();
+    const player = new IterablePlayer(makeSource([]));
+    let latestState: PlayerState | undefined;
+    try {
+      player.setListener((state) => {
+        latestState = state;
+      });
+      await player.initialize({});
+      player.updateRenderHealth('image', {
+        topic: TOPIC,
+        visible: true,
+        pending: true,
+      });
+      player.play();
+      clock.setNow(1_501);
+      clock.runNextRaf();
+      expect(latestState?.progress.renderBuffering).toBe(true);
+
+      player.seek({ sec: 5, nsec: 0 });
+      await flushAsyncWork();
+      expect(player.getCurrentTime()).toEqual({ sec: 5, nsec: 0 });
+      expect(latestState?.progress.renderBuffering).toBe(false);
+      expect(latestState?.progress.buffering).toBe(false);
+    } finally {
+      player.close();
+      clock.restore();
+    }
+  });
+});
+
 describe('IterablePlayer high-frequency lane', () => {
   it('routes video-only topics outside the generic message bus', async () => {
     const source = makeSource([makeImageMessage()]);
@@ -894,8 +1101,9 @@ describe('IterablePlayer playback clock', () => {
 
     const source = makeSource([]);
     const message = makeImageMessageAtMs(150);
+    const delayedEmptyBatch = deferred<MessageEvent[]>();
     const cursor = {
-      nextBatch: vi.fn().mockResolvedValueOnce([]).mockResolvedValueOnce([message]),
+      nextBatch: vi.fn().mockReturnValueOnce(delayedEmptyBatch.promise).mockResolvedValueOnce([message]),
       end: vi.fn(async () => undefined),
     };
     vi.mocked(source.getMessageCursor).mockResolvedValue(cursor as never);
@@ -920,8 +1128,15 @@ describe('IterablePlayer playback clock', () => {
 
       now = 100;
       runNextRaf();
+      await Promise.resolve();
+      now = 600;
+      runNextRaf();
+      await Promise.resolve();
+
+      delayedEmptyBatch.resolve([]);
       await flushAsyncWork();
-      now = 200;
+
+      now = 700;
       runNextRaf();
       await flushAsyncWork();
 

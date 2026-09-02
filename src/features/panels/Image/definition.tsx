@@ -27,9 +27,9 @@ export const imagePanelDefinition: PanelDefinition<ImageConfig> = {
   },
   createDefaultConfig: defaultImageConfig,
   configSchema: { version: 7, parse: parseImageConfig },
-  render: ({ player, panelId, config, setConfig }) => (
+  render: ({ player, panelId, visible, config, setConfig }) => (
     <PanelSuspense>
-      <ImagePanel player={player} panelId={panelId} {...config} setConfig={setConfig} />
+      <ImagePanel player={player} panelId={panelId} visible={visible} {...config} setConfig={setConfig} />
     </PanelSuspense>
   ),
   renderSettings: (ctx) => <ImagePanelSettings {...ctx} />,

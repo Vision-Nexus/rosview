@@ -707,7 +707,7 @@ export const RawMessagesPanel: React.FC<RawMessagesPanelProps> = ({
   );
 
   return (
-    <div className="flex h-full flex-col overflow-hidden bg-background">
+    <div className="flex h-full flex-col overflow-hidden bg-background" data-testid="raw-messages-panel">
       <PanelTopicBar>
         <TopicQuickPicker
           value={topic}

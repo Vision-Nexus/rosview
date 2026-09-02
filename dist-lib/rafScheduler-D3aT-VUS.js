@@ -3435,6 +3435,7 @@ var tn = {
 	"urdfDebug.help.body": "Upload a URDF and tune joint mapping until the preview matches your recording. Toggle Rotate mesh visuals when mesh orientation looks wrong (common for CAD exports). Use Symmetric pair for left/right gripper joints and Mimic fill to apply URDF mimic tags. Export recipe.json or a processing script to rewrite MCAP with /robot_description and /tf."
 }, on = {
 	"playback.annotationsEmpty": "No annotation ranges",
+	"playback.buffering": "Buffering playback",
 	"playback.play": "Play playback",
 	"playback.pause": "Pause playback",
 	"playback.timeMode.relative.aria": "Relative time from log start; click to switch to absolute local time",
@@ -4117,6 +4118,7 @@ var tn = {
 	"urdfDebug.help.body": "URDF をアップロードし、プレビューが録画データと一致するまで関節マッピングを調整します。mesh の向きが合わない場合（CAD 出力でよくある）は「Mesh ビジュアルを回転」を切り替えてください。対称関節ペアは左右グリッパー用、Mimic 補完は URDF の mimic タグに従い従動関節を補完します。recipe.json または処理スクリプトをエクスポートすると、/robot_description と /tf を含む MCAP をローカルで再生成できます。"
 }, mn = {
 	"playback.annotationsEmpty": "注釈範囲がありません",
+	"playback.buffering": "再生をバッファリング中",
 	"playback.play": "再生",
 	"playback.pause": "一時停止",
 	"playback.timeMode.relative.aria": "ログ先頭からの相対時刻です。クリックで絶対時刻に切り替え",
@@ -4799,6 +4801,7 @@ var tn = {
 	"urdfDebug.help.body": "上传 URDF 并调整关节映射，直到预览与录制数据一致。若 mesh 朝向不对（常见于 CAD 导出），可切换「旋转 mesh 视觉」。对称关节对用于左右夹爪；Mimic 填充会根据 URDF 的 mimic 标签补齐从动关节。导出 recipe.json 或处理脚本后，可在本地重写 MCAP，写入 /robot_description 与 /tf。"
 }, Sn = {
 	"playback.annotationsEmpty": "暂无标注区间",
+	"playback.buffering": "播放缓冲中",
 	"playback.play": "播放",
 	"playback.pause": "暂停",
 	"playback.timeMode.relative.aria": "当前为相对时间，点击切换为绝对时间",

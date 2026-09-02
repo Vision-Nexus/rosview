@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import type { DockviewPanelApi } from 'dockview';
 import type { Player } from '@/core/types/player';
 import { useSidebarStore } from '@/shared/hooks/useSidebarStore';
 import { PanelErrorBoundary } from './PanelErrorBoundary';
@@ -18,6 +19,7 @@ interface PanelRuntimeShellProps<TConfig> {
   player: Player;
   panelId: string;
   panelTitle: string;
+  panelApi: DockviewPanelApi;
   definition: PanelDefinition<TConfig>;
   initialConfig: TConfig;
   onDuplicate: (panelId: string) => void;
@@ -32,6 +34,7 @@ export function PanelRuntimeShell<TConfig>({
   player,
   panelId,
   panelTitle,
+  panelApi,
   definition,
   initialConfig,
   onDuplicate,
@@ -47,6 +50,15 @@ export function PanelRuntimeShell<TConfig>({
   const config = storeConfig !== undefined ? storeConfig : initialConfig;
 
   const [resetKey, setResetKey] = useState(0);
+  const [visible, setVisible] = useState(panelApi.isVisible);
+
+  useEffect(() => {
+    setVisible(panelApi.isVisible);
+    const disposable = panelApi.onDidVisibilityChange((event) => {
+      setVisible(event.isVisible);
+    });
+    return () => disposable.dispose();
+  }, [panelApi]);
 
   const setConfig = useCallback<PanelSettingsContext<TConfig>['setConfig']>(
     (next) => {
@@ -149,6 +161,7 @@ export function PanelRuntimeShell<TConfig>({
           player,
           panelId,
           panelTitle,
+          visible,
           config,
           setConfig,
           resetPanel,
@@ -157,4 +170,3 @@ export function PanelRuntimeShell<TConfig>({
     </PanelErrorBoundary>
   );
 }
-

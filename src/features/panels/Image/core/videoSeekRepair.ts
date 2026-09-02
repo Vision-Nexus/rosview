@@ -212,6 +212,8 @@ export interface ExecuteVideoBootstrapArgs {
   liveEvents?: RosMessageEvent[];
   signal?: AbortSignal;
   preserveFrame?: boolean;
+  /** ImagePanel lifecycle generation used to reject stale worker events. */
+  generation?: number;
   transferOwnership?: boolean;
   /** Optional ImageAnnotations topic paired by the authoritative MCAP log-time key. */
   annotationTopic?: string;
@@ -266,6 +268,7 @@ export async function executeVideoBootstrap(args: ExecuteVideoBootstrapArgs): Pr
       codec: bootstrap.codec,
       frames: prepared.frames,
       preserveFrame,
+      generation: args.generation ?? 0,
     } satisfies ImageRenderWorkerRequest,
     prepared.transfer,
   );

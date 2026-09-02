@@ -125,6 +125,7 @@ export type {
   Player,
   PlayerPresence,
   PlayerState,
+  RenderHealthReport,
   Subscription,
 } from '../core/types/player';
 

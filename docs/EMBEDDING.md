@@ -158,6 +158,25 @@ Related props:
 
 ---
 
+## Advanced: Hide panel topic bars
+
+Embedded viewers whose layout already supplies each panel's topic can remove the in-panel topic picker:
+
+```tsx
+<RosViewer
+  url="https://cdn.example.com/recording.mcap"
+  defaultPanel={{
+    type: 'Image',
+    config: { topic: '/camera/front/image/compressed' },
+  }}
+  showPanelTopicBar={false}
+/>
+```
+
+`showPanelTopicBar` defaults to `true`. Setting it to `false` omits the topic-picker bar from Image and Raw Messages panels. Dockview tab headers, close buttons, panel layout, and other viewer chrome remain available. Because the in-panel picker is unavailable, provide panel topics through `initialLayout` or `defaultPanel`.
+
+---
+
 ## Advanced: Controlled theme & language
 
 Disable internal localStorage persistence and fully control state from your application:
@@ -436,4 +455,3 @@ RosView ships **no** product-specific annotation, QC rules, or persistence. Host
 1. Pass opaque `hostContext` on `RosViewer` (for example `{ datasetId, canAnnotate }`) and read `context.hostContext` inside `extensions`.
 2. Implement sidebar tabs and `playbackOverlays` / `timelineOverlays` using `context.playback`, `context.timeline`, and optionally `context.messages.getMessagesInTimeRange`.
 3. Keep all REST calls, permissions, and domain models in the host app.
-

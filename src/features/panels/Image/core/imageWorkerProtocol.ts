@@ -70,16 +70,19 @@ export type ImageRenderWorkerRequest =
   | {
       type: 'frame';
       frame: ImageWorkerFrameEnvelope;
+      generation: number;
     }
   | {
       type: 'bootstrapVideo';
       codec: 'h264' | 'h265';
       frames: ImageWorkerFrameEnvelope[];
       preserveFrame?: boolean;
+      generation: number;
     }
   | {
       type: 'reset';
       preserveFrame?: boolean;
+      generation: number;
     }
   | {
       type: 'dispose';
@@ -109,8 +112,14 @@ export type ImageRenderWorkerEvent =
     }
   | {
       type: 'rendered';
+      generation: number;
       timestampNs: bigint;
       width: number;
       height: number;
       annotationState: 'disabled' | 'matched' | 'gap';
+    }
+  | {
+      type: 'renderHealth';
+      generation: number;
+      pending: boolean;
     };
