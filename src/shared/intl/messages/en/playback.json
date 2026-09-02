@@ -1,5 +1,6 @@
 {
   "playback.annotationsEmpty": "No annotation ranges",
+  "playback.buffering": "Buffering playback",
   "playback.play": "Play playback",
   "playback.pause": "Pause playback",
   "playback.timeMode.relative.aria": "Relative time from log start; click to switch to absolute local time",

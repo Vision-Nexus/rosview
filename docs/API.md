@@ -377,6 +377,8 @@ import type {
 | `RosViewExtensionContext` | Stable context object passed into extension renderers. |
 | `PlaybackControlsApi` | Playback controls: `seek`, `play`, `pause`, `setSpeed`, `setLooping`, `stepBy`, `stepMessage`, `playUntil`, `subscribeCurrentTime`, `getCurrentTime`, `getSnapshot`. |
 | `PlaybackSnapshot` | Low-frequency playback state including `currentTime`, `startTime`, `endTime`, `isPlaying`, `speed`, optional `progressPercent`, `buffering`, `problems`. |
+| `PlayerState` | Player state exposed by `useMessagePipeline`; `progress.renderBuffering` identifies visible-panel render stalls, while `progress.buffering` combines source and render buffering. |
+| `RenderHealthReport` | Image-panel render progress supplied to `Player.updateRenderHealth`; includes visibility, pending work, rendered media time, and topic cadence. |
 | `TimelineApi` | Helpers aligned with the scrubber: `getTimeBounds`, `timeToPercent`, `percentToTime`. |
 | `MessageAccessApi` | Read-only `getMessagesInTimeRange` when the underlying player supports it. |
 
@@ -443,6 +445,8 @@ const annotationExtension: RosViewExtension = {
 For advanced use cases — subscribing to playback state and decoded messages from within custom React components rendered inside the viewer.
 
 `useMessagePipeline` is intended for slowly-changing metadata such as presence, topics, bounds, progress, speed, and decoded message availability. Do not use `playerState.activeData.currentTime` for live playback UI; use `playback.subscribeCurrentTime()` or `playback.getCurrentTime()` instead.
+
+Visible Image panels automatically hold the shared playback clock when decode/render work remains behind the playhead. During this recovery hold, `activeData.isPlaying` remains `true`, `progress.renderBuffering` is `true`, and `progress.buffering` remains the combined source-or-render buffering signal.
 
 ```ts
 import { useMessagePipeline } from '@ioai/rosview';

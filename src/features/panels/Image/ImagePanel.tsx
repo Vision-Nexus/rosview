@@ -1,8 +1,8 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useEffectEvent, useRef, useState } from 'react';
 import { useIntl } from 'react-intl';
 import type { Player } from '@/core/types/player';
 import { useMessagePipeline } from '@/core/pipeline/useMessagePipeline';
-import type { MessageEvent as RosMessageEvent, Time } from '@/core/types/ros';
+import type { MessageEvent as RosMessageEvent, Time, TopicInfo } from '@/core/types/ros';
 import { scheduleFrame } from '@/shared/utils/rafScheduler';
 import { fromNano, toNano } from '@/shared/utils/time';
 import type { ImageAnnotationsFrame } from './core/imageAnnotations';
@@ -47,6 +47,7 @@ function configToRawDecodeOptions(opts: ColorOptions): Partial<RawImageDecodeOpt
 export type ImagePanelProps = ImageConfig & {
   player: Player;
   panelId: string;
+  visible: boolean;
   setConfig: (next: ImageConfig | ((prev: ImageConfig) => ImageConfig)) => void;
 };
 
@@ -58,6 +59,7 @@ export const ImagePanel: React.FC<ImagePanelProps> = (props) => {
   const {
     player,
     panelId,
+    visible,
     setConfig,
     topic,
     annotationTopic,
@@ -82,6 +84,9 @@ export const ImagePanel: React.FC<ImagePanelProps> = (props) => {
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const workerRef = useRef<Worker | null>(null);
   const workerDisposeTimerRef = useRef<number | null>(null);
+  const renderHealthGenerationRef = useRef(0);
+  const workerPendingRef = useRef(false);
+  const renderedTimeRef = useRef<Time | undefined>(undefined);
   const transferredCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const lastUiStatusRef = useRef<ImageSurfaceStatus>({ phase: 'idle' });
   const videoSeekRepairAbortRef = useRef<AbortController | null>(null);
@@ -109,8 +114,38 @@ export const ImagePanel: React.FC<ImagePanelProps> = (props) => {
   const imageConsumerId = `${panelId}:image-main`;
   const annotationConsumerId = `${panelId}:image-annotations`;
   const selectedAnnotationTopic = annotationVisible ? annotationTopic.trim() : '';
-  const topicSchema = useMessagePipeline((state) =>
-    state.playerState.activeData?.topics.find((entry) => entry.name === topic)?.type ?? '',
+  const topicInfo = useMessagePipeline((state) =>
+    state.playerState.activeData?.topics.find((entry) => entry.name === topic),
+  );
+  const topicSchema = topicInfo?.type ?? '';
+  const averageFrameIntervalMs = getAverageFrameIntervalMs(topicInfo);
+  const reportRenderHealth = useEffectEvent(() => {
+    if (!topic.trim()) {
+      player.unregisterRenderHealth?.(panelId);
+      return;
+    }
+    player.updateRenderHealth?.(panelId, {
+      topic,
+      visible,
+      pending:
+        workerPendingRef.current ||
+        videoBootstrapInFlightRef.current ||
+        (frameAnnotationPairerRef.current?.pendingFrameCount ?? 0) > 0,
+      renderedTime: renderedTimeRef.current,
+      averageFrameIntervalMs,
+    });
+  });
+
+  useEffect(() => {
+    if (topic.trim()) reportRenderHealth();
+    else player.unregisterRenderHealth?.(panelId);
+  }, [averageFrameIntervalMs, panelId, player, topic, visible]);
+
+  useEffect(
+    () => () => {
+      player.unregisterRenderHealth?.(panelId);
+    },
+    [panelId, player],
   );
 
   // Worker lifecycle: init on mount, dispose on unmount
@@ -164,7 +199,16 @@ export const ImagePanel: React.FC<ImagePanelProps> = (props) => {
         setMetrics(data.metrics);
         return;
       }
+      if (data.type === 'renderHealth') {
+        if (data.generation !== renderHealthGenerationRef.current) return;
+        workerPendingRef.current = data.pending;
+        reportRenderHealth();
+        return;
+      }
       if (data.type === 'rendered') {
+        if (data.generation !== renderHealthGenerationRef.current) return;
+        renderedTimeRef.current = fromNano(data.timestampNs);
+        reportRenderHealth();
         setRenderedAnnotationState(data.annotationState);
         if (data.annotationState === 'gap') setAnnotationGap(true);
         return;
@@ -242,6 +286,8 @@ export const ImagePanel: React.FC<ImagePanelProps> = (props) => {
     videoOrderedModeRef.current = false;
     videoBootstrapInFlightRef.current = false;
     videoBootstrapGenerationRef.current += 1;
+    const renderHealthGeneration = renderHealthGenerationRef.current + 1;
+    renderHealthGenerationRef.current = renderHealthGeneration;
     videoBufferedLiveRef.current = [];
     consumerModeRef.current = 'latest';
     const pairer = selectedAnnotationTopic ? new FrameAnnotationPairer() : null;
@@ -257,12 +303,28 @@ export const ImagePanel: React.FC<ImagePanelProps> = (props) => {
     setAnnotationWaiting(false);
     setRenderedAnnotationState('disabled');
     setMetrics(null);
-    worker.postMessage({ type: 'reset' } satisfies ImageRenderWorkerRequest);
+    workerPendingRef.current = false;
+    renderedTimeRef.current = undefined;
+    reportRenderHealth();
+    worker.postMessage({
+      type: 'reset',
+      generation: renderHealthGeneration,
+    } satisfies ImageRenderWorkerRequest);
+
+    const queueFrameForRender = (
+      frame: RosMessageEvent,
+      annotation?: ImageAnnotationsFrame | null,
+    ) => {
+      if (!postImageFrame(worker, frame, renderHealthGenerationRef.current, annotation)) return;
+      workerPendingRef.current = true;
+      reportRenderHealth();
+    };
 
     const deliverPairs = (pairs: ImageFrameAnnotationPair[]) => {
       if (pairs.some((pair) => pair.annotation === null)) setAnnotationGap(true);
-      for (const pair of pairs) postImageFrame(worker, pair.frame, pair.annotation);
+      for (const pair of pairs) queueFrameForRender(pair.frame, pair.annotation);
       setAnnotationWaiting((pairer?.pendingFrameCount ?? 0) > 0);
+      reportRenderHealth();
       scheduleExceptionalAnnotationFallback();
     };
 
@@ -345,6 +407,7 @@ export const ImagePanel: React.FC<ImagePanelProps> = (props) => {
     const handleVideoFrame = (event: RosMessageEvent) => {
       if (videoBootstrapInFlightRef.current) {
         videoBufferedLiveRef.current.push(event);
+        reportRenderHealth();
         return;
       }
       if (pairer) {
@@ -352,14 +415,14 @@ export const ImagePanel: React.FC<ImagePanelProps> = (props) => {
         // exceptional gap and gets one bounded confirmation range read instead of per-frame scans.
         deliverPairs(pairer.pushFrame(event));
       } else {
-        postImageFrame(worker, event);
+        queueFrameForRender(event);
       }
     };
 
     const dispatchHighFrequencyBatch = (messages: RosMessageEvent[]) => {
       for (const event of messages) {
         if (isVideoMessageEvent(event)) handleVideoFrame(event);
-        else postImageFrame(worker, event);
+        else queueFrameForRender(event);
       }
     };
 
@@ -386,6 +449,7 @@ export const ImagePanel: React.FC<ImagePanelProps> = (props) => {
       videoBootstrapGenerationRef.current = generation;
       const bootstrapLiveEvents = [...videoBufferedLiveRef.current];
       videoBootstrapInFlightRef.current = true;
+      reportRenderHealth();
       if (selectedAnnotationTopic) setAnnotationWaiting(true);
       videoSeekRepairAbortRef.current?.abort();
       const controller = new AbortController();
@@ -401,6 +465,7 @@ export const ImagePanel: React.FC<ImagePanelProps> = (props) => {
           liveEvents: bootstrapLiveEvents,
           signal: controller.signal,
           preserveFrame,
+          generation: renderHealthGenerationRef.current,
           annotationTopic: selectedAnnotationTopic || undefined,
           onAnnotationGap: () => setAnnotationGap(true),
         });
@@ -419,7 +484,7 @@ export const ImagePanel: React.FC<ImagePanelProps> = (props) => {
         setAnnotationWaiting(false);
         for (const event of trailingLiveEvents) {
           if (pairer) deliverPairs(pairer.pushFrame(event));
-          else postImageFrame(worker, event);
+          else queueFrameForRender(event);
         }
         return true;
       } finally {
@@ -429,6 +494,7 @@ export const ImagePanel: React.FC<ImagePanelProps> = (props) => {
         ) {
           videoBootstrapInFlightRef.current = false;
           videoSeekRepairAbortRef.current = null;
+          reportRenderHealth();
         }
       }
     };
@@ -495,6 +561,7 @@ export const ImagePanel: React.FC<ImagePanelProps> = (props) => {
       resetAnnotationFallbackRef.current?.();
       resetAnnotationFallbackRef.current = null;
       videoBootstrapGenerationRef.current += 1;
+      renderHealthGenerationRef.current += 1;
       videoSeekRepairAbortRef.current?.abort();
       videoSeekRepairAbortRef.current = null;
       videoBufferedLiveRef.current = [];
@@ -504,12 +571,19 @@ export const ImagePanel: React.FC<ImagePanelProps> = (props) => {
       runVideoBootstrapRef.current = null;
       player.unregisterHighFrequencyConsumer(imageConsumerId);
       if (pairer) player.unregisterHighFrequencyConsumer(annotationConsumerId);
-      worker.postMessage({ type: 'reset' } satisfies ImageRenderWorkerRequest);
+      workerPendingRef.current = false;
+      renderedTimeRef.current = undefined;
+      player.unregisterRenderHealth?.(panelId);
+      worker.postMessage({
+        type: 'reset',
+        generation: renderHealthGenerationRef.current,
+      } satisfies ImageRenderWorkerRequest);
     };
   }, [
     annotationConsumerId,
     imageConsumerId,
     player,
+    panelId,
     selectedAnnotationTopic,
     topic,
     topicSchema,
@@ -525,11 +599,15 @@ export const ImagePanel: React.FC<ImagePanelProps> = (props) => {
   useEffect(
     () =>
       player.subscribeSeek((time) => {
+        renderHealthGenerationRef.current += 1;
         frameAnnotationPairerRef.current?.reset();
         videoBufferedLiveRef.current = [];
+        workerPendingRef.current = false;
+        renderedTimeRef.current = undefined;
         setAnnotationGap(false);
         setAnnotationWaiting(selectedAnnotationTopic.length > 0);
         resetAnnotationFallbackRef.current?.();
+        reportRenderHealth();
         const worker = workerRef.current;
         if (worker && topic && videoOrderedModeRef.current) {
           void runVideoBootstrapRef.current?.(time, true);
@@ -537,6 +615,7 @@ export const ImagePanel: React.FC<ImagePanelProps> = (props) => {
           worker?.postMessage({
             type: 'reset',
             preserveFrame: true,
+            generation: renderHealthGenerationRef.current,
           } satisfies ImageRenderWorkerRequest);
         }
       }),
@@ -684,18 +763,36 @@ function isUiStatusEqual(a: ImageSurfaceStatus, b: ImageSurfaceStatus): boolean 
   );
 }
 
+function getAverageFrameIntervalMs(topicInfo: TopicInfo | undefined): number | undefined {
+  if (
+    topicInfo?.durationSec != null &&
+    Number.isFinite(topicInfo.durationSec) &&
+    topicInfo.durationSec > 0 &&
+    topicInfo.messageCount != null &&
+    topicInfo.messageCount > 1
+  ) {
+    return (topicInfo.durationSec * 1000) / (topicInfo.messageCount - 1);
+  }
+  if (topicInfo?.frequency != null && Number.isFinite(topicInfo.frequency) && topicInfo.frequency > 0) {
+    return 1000 / topicInfo.frequency;
+  }
+  return undefined;
+}
+
 function postImageFrame(
   worker: Worker,
   messageEvent: RosMessageEvent,
+  generation: number,
   annotation?: ImageAnnotationsFrame | null,
-): void {
+): boolean {
   // High-frequency consumers receive a payload dedicated to this consumer, so
   // a full-span ArrayBuffer can be handed directly to the render worker.
   const next = toWorkerFrame(messageEvent, { transferOwnership: true });
-  if (!next) return;
+  if (!next) return false;
   next.frame.annotation = annotation;
   worker.postMessage(
-    { type: 'frame', frame: next.frame } satisfies ImageRenderWorkerRequest,
+    { type: 'frame', frame: next.frame, generation } satisfies ImageRenderWorkerRequest,
     next.transfer,
   );
+  return true;
 }

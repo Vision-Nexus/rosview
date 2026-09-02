@@ -146,6 +146,10 @@ class WorkerVideoDecoder {
     return this.#decoder?.state === 'configured' ? this.#decoder.decodeQueueSize : 0;
   }
 
+  public get hasPendingWork(): boolean {
+    return this.#submitted.size > 0 || this.decodeQueueSize > 0;
+  }
+
   public async submitFrame(
     frame: ImageWorkerFrameEnvelope,
     data: Uint8Array<ArrayBuffer>,
@@ -298,6 +302,7 @@ class ImageRenderWorkerRuntime {
   #pendingFrame: ImageWorkerFrameEnvelope | null = null;
   #pendingVideoFrames: ImageWorkerFrameEnvelope[] = [];
   #isProcessing = false;
+  #processingEpoch: number | null = null;
   #decoder: WorkerVideoDecoder;
   #pendingDecodedVideo: {
     videoFrame: VideoFrame;
@@ -332,6 +337,8 @@ class ImageRenderWorkerRuntime {
   #isPlaying = false;
   #lastMetricsAt = -Infinity;
   #epoch = 0;
+  #healthGeneration = 0;
+  #lastPostedRenderHealth: { generation: number; pending: boolean } | null = null;
 
   public constructor() {
     if (!this.#bufferCtx) {
@@ -342,6 +349,7 @@ class ImageRenderWorkerRuntime {
       error: (error) => this.#handleVideoDecoderError(error),
       dequeue: () => {
         this.#updateVideoPressure();
+        this.#emitRenderHealth();
         void this.#drainLatestFrame();
       },
     });
@@ -361,6 +369,7 @@ class ImageRenderWorkerRuntime {
         this.#applyViewport();
         this.#clearCanvas();
         this.#emitStatus({ phase: 'idle' });
+        this.#emitRenderHealth(true);
         return;
 
       case 'viewport':
@@ -389,10 +398,13 @@ class ImageRenderWorkerRuntime {
         return;
 
       case 'frame':
+        this.#healthGeneration = message.generation;
         if (this.#haltUntilReset) {
+          this.#emitRenderHealth(true);
           return;
         }
         this.#enqueueFrame(message.frame);
+        this.#emitRenderHealth();
         if (!this.#isProcessing) {
           void this.#drainLatestFrame();
         }
@@ -400,10 +412,16 @@ class ImageRenderWorkerRuntime {
 
 
       case 'bootstrapVideo':
-        this.#bootstrapVideo(message.codec, message.frames, message.preserveFrame === true);
+        this.#bootstrapVideo(
+          message.codec,
+          message.frames,
+          message.preserveFrame === true,
+          message.generation,
+        );
         return;
 
       case 'reset':
+        this.#healthGeneration = message.generation;
         this.#epoch += 1;
         this.#pendingFrame = null;
         this.#pendingVideoFrames = [];
@@ -418,6 +436,7 @@ class ImageRenderWorkerRuntime {
           this.#clearCanvas();
           this.#emitStatus({ phase: 'idle' });
         }
+        this.#emitRenderHealth(true);
         return;
 
       case 'dispose':
@@ -439,7 +458,9 @@ class ImageRenderWorkerRuntime {
     codec: VideoCodec,
     frames: ImageWorkerFrameEnvelope[],
     preserveFrame: boolean,
+    generation: number,
   ): void {
+    this.#healthGeneration = generation;
     this.#epoch += 1;
     this.#pendingFrame = null;
     this.#pendingVideoFrames = [];
@@ -464,6 +485,7 @@ class ImageRenderWorkerRuntime {
     ) {
       this.#videoWaitingForRandomAccess = true;
       this.#emitMetricsIfDue(true);
+      this.#emitRenderHealth(true);
       return;
     }
 
@@ -472,6 +494,7 @@ class ImageRenderWorkerRuntime {
     }
 
     this.#emitMetricsIfDue(true);
+    this.#emitRenderHealth(true);
     if (!this.#isProcessing) void this.#drainLatestFrame();
   }
 
@@ -602,6 +625,7 @@ class ImageRenderWorkerRuntime {
     }
     this.#isProcessing = true;
     const epoch = this.#epoch;
+    this.#processingEpoch = epoch;
     try {
       let frame: ImageWorkerFrameEnvelope | null;
       while (true) {
@@ -631,6 +655,8 @@ class ImageRenderWorkerRuntime {
       }
     } finally {
       this.#isProcessing = false;
+      this.#processingEpoch = null;
+      this.#emitRenderHealth();
       if (
         this.#pendingFrame ||
         (this.#pendingVideoFrames.length > 0 &&
@@ -776,6 +802,7 @@ class ImageRenderWorkerRuntime {
       this.#droppedVideoFrames += 1;
       this.#updateVideoPressure();
       this.#emitMetricsIfDue();
+      this.#emitRenderHealth();
       return;
     }
 
@@ -787,6 +814,7 @@ class ImageRenderWorkerRuntime {
       videoFrame: output.videoFrame,
       sourceFrame: output.sourceFrame,
     };
+    this.#emitRenderHealth();
     this.#scheduleVideoRender();
     this.#updateVideoPressure();
     this.#emitMetricsIfDue();
@@ -880,6 +908,7 @@ class ImageRenderWorkerRuntime {
       if (this.#pendingDecodedVideo) {
         this.#scheduleVideoRender();
       }
+      this.#emitRenderHealth();
     }
   }
 
@@ -909,6 +938,7 @@ class ImageRenderWorkerRuntime {
       this.#emitStatus({ phase: 'error', message: error.message });
     }
     this.#emitMetricsIfDue(true);
+    this.#emitRenderHealth();
   }
 
   #resyncVideoDecoder(): void {
@@ -988,6 +1018,29 @@ class ImageRenderWorkerRuntime {
       codec: this.#decoder.codec,
     };
     workerScope.postMessage({ type: 'metrics', metrics } satisfies ImageRenderWorkerEvent);
+  }
+
+  #emitRenderHealth(force = false): void {
+    const pending =
+      (this.#isProcessing && this.#processingEpoch === this.#epoch) ||
+      this.#pendingFrame != null ||
+      this.#pendingVideoFrames.length > 0 ||
+      this.#decoder.hasPendingWork ||
+      this.#pendingDecodedVideo != null ||
+      this.#videoRenderTimer != null;
+    if (
+      !force &&
+      this.#lastPostedRenderHealth?.generation === this.#healthGeneration &&
+      this.#lastPostedRenderHealth.pending === pending
+    ) {
+      return;
+    }
+    this.#lastPostedRenderHealth = { generation: this.#healthGeneration, pending };
+    workerScope.postMessage({
+      type: 'renderHealth',
+      generation: this.#healthGeneration,
+      pending,
+    } satisfies ImageRenderWorkerEvent);
   }
 
   #renderRawFrame(frame: {
@@ -1254,6 +1307,7 @@ class ImageRenderWorkerRuntime {
     this.#lastDrawnMediaTimeNs = imageTimestampNs;
     workerScope.postMessage({
       type: 'rendered',
+      generation: this.#healthGeneration,
       timestampNs: imageTimestampNs,
       width: sourceWidth,
       height: sourceHeight,

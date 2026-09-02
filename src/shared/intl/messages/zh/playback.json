@@ -1,5 +1,6 @@
 {
   "playback.annotationsEmpty": "暂无标注区间",
+  "playback.buffering": "播放缓冲中",
   "playback.play": "播放",
   "playback.pause": "暂停",
   "playback.timeMode.relative.aria": "当前为相对时间，点击切换为绝对时间",

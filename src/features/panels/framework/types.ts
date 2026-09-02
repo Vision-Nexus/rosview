@@ -53,6 +53,8 @@ export interface PanelRenderProps<TConfig> {
   player: Player;
   panelId: string;
   panelTitle: string;
+  /** Whether Dockview currently presents this panel rather than a sibling tab. */
+  visible: boolean;
   config: TConfig;
   setConfig: (next: TConfig | ((prev: TConfig) => TConfig)) => void;
   resetPanel: () => void;

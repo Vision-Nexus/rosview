@@ -364,6 +364,8 @@ export declare class MinimalPlayer implements Player {
     unregisterSubscriptions(_panelId: string): void;
     registerHighFrequencyConsumer(_consumerId: string, _consumer: HighFrequencyConsumer): void;
     unregisterHighFrequencyConsumer(_consumerId: string): void;
+    updateRenderHealth(_panelId: string, _report: RenderHealthReport): void;
+    unregisterRenderHealth(_panelId: string): void;
     subscribeCurrentTime(cb: (time: Time) => void): () => void;
     subscribeSeek(cb: (time: Time) => void): () => void;
     getCurrentTime(): Time | undefined;
@@ -482,6 +484,10 @@ export declare interface Player {
     unregisterSubscriptions(panelId: string): void;
     registerHighFrequencyConsumer(consumerId: string, consumer: HighFrequencyConsumer): void;
     unregisterHighFrequencyConsumer(consumerId: string): void;
+    /** Register or update render progress for a panel participating in playback backpressure. */
+    updateRenderHealth?(panelId: string, report: RenderHealthReport): void;
+    /** Remove a panel from playback backpressure aggregation. */
+    unregisterRenderHealth?(panelId: string): void;
     /** Playback time updates without going through React state (rAF path). Immediately emits the current time. */
     subscribeCurrentTime(cb: (time: Time) => void): Unsubscribe;
     /** Fires only for explicit seeks, message steps, and loop wraps, never ordinary playback ticks. */
@@ -562,8 +568,10 @@ export declare interface PlayerState {
         cursorRebuildCount?: number;
         /** Backfill fallback count for sustained empty batches. */
         fallbackBackfillCount?: number;
-        /** Playback is intentionally waiting for a continuous local buffer. */
+        /** Playback is intentionally waiting for source data or visible rendering to recover. */
         buffering?: boolean;
+        /** Playback is held because at least one visible image panel has stalled rendering. */
+        renderBuffering?: boolean;
         /** Estimated continuous local buffer ahead of the current playback time. */
         bufferedAheadMs?: number;
         /** Decoded-message look-ahead beyond the current playhead. */
@@ -626,6 +634,17 @@ export declare type RemoteReaderTuning = Readonly<{
     fetchBlockSizeInBytes?: number;
     maxRequestSizeInBytes?: number;
 }>;
+
+/** Render progress reported by a panel that participates in the shared playback clock. */
+export declare interface RenderHealthReport {
+    topic: string;
+    visible: boolean;
+    pending: boolean;
+    /** Receive/log time of the newest frame actually drawn to the panel surface. */
+    renderedTime?: Time;
+    /** Average interval between frames in recording/media time. */
+    averageFrameIntervalMs?: number;
+}
 
 export declare interface ResolvedEmbedChrome {
     showNavbar: boolean;

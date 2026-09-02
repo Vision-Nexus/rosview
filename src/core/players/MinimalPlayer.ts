@@ -3,6 +3,7 @@ import type {
   HighFrequencyConsumer,
   Player,
   PlayerState,
+  RenderHealthReport,
   Subscription,
 } from '@/core/types/player';
 import type { MessageEvent, Time } from '@/core/types/ros';
@@ -60,6 +61,10 @@ export class MinimalPlayer implements Player {
   registerHighFrequencyConsumer(_consumerId: string, _consumer: HighFrequencyConsumer): void {}
 
   unregisterHighFrequencyConsumer(_consumerId: string): void {}
+
+  updateRenderHealth(_panelId: string, _report: RenderHealthReport): void {}
+
+  unregisterRenderHealth(_panelId: string): void {}
 
   subscribeCurrentTime(cb: (time: Time) => void): () => void {
     this._timeSubscribers.add(cb);

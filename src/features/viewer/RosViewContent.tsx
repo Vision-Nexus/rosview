@@ -14,6 +14,7 @@ import { openRawMessagesPanel } from '@/features/workspace/sidebar/topic-list/op
 import { useIntl } from 'react-intl';
 import { WelcomeScreen } from '@/features/workspace/common/WelcomeScreen';
 import { LoadingOverlay } from '@/features/workspace/common/LoadingOverlay';
+import { PlaybackBufferingOverlay } from '@/features/workspace/common/PlaybackBufferingOverlay';
 import { useMessagePipeline } from '@/core/pipeline/useMessagePipeline';
 import type { MessagePipelineState } from '@/core/pipeline/store';
 import { useMessagePipelineStore } from '@/core/pipeline/store';
@@ -114,6 +115,11 @@ export const RosViewContent: React.FC<RosViewContentProps> = ({
   const { formatMessage } = useIntl();
   const presence = useMessagePipeline((state: MessagePipelineState) => state.playerState.presence);
   const sortedTopics = useMessagePipeline((state: MessagePipelineState) => state.sortedTopics);
+  const playbackBuffering = useMessagePipeline(
+    (state: MessagePipelineState) =>
+      state.playerState.activeData?.isPlaying === true &&
+      state.playerState.progress.buffering === true,
+  );
   const isReady = presence === 'ready';
   const showWelcomeFallback = !isReady && Boolean(manualOpenHint);
   const topicDragDepthRef = useRef(0);
@@ -374,6 +380,7 @@ export const RosViewContent: React.FC<RosViewContentProps> = ({
                     onCancel={onCancelLoading}
                   />
                 ) : null}
+                {isReady && playbackBuffering ? <PlaybackBufferingOverlay /> : null}
               </main>
             </ResizablePanel>
           </ResizablePanelGroup>

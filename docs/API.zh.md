@@ -373,6 +373,8 @@ import type {
 | `RosViewExtensionContext` | 传给扩展渲染器的稳定上下文（含 `playback`、`timeline`、`messages`、`hostContext`）。 |
 | `PlaybackControlsApi` | 播放控制：`seek`、`play`、`pause`、`setSpeed`、`setLooping`、`stepBy`、`stepMessage`、`playUntil`、`subscribeCurrentTime`、`getCurrentTime`、`getSnapshot`。 |
 | `PlaybackSnapshot` | 低频播放状态快照；包含 `currentTime`、`startTime`、`endTime`、`isPlaying`、`speed`，可含 `progressPercent`、`buffering`、`problems` 等。 |
+| `PlayerState` | `useMessagePipeline` 暴露的播放器状态；`progress.renderBuffering` 表示可见面板渲染停滞，`progress.buffering` 表示数据源或渲染缓冲的组合状态。 |
+| `RenderHealthReport` | Image 面板通过 `Player.updateRenderHealth` 上报的渲染进度，包含可见性、待处理任务、已渲染媒体时间和话题帧间隔。 |
 | `TimelineApi` | 与主 scrubber 对齐：`getTimeBounds`、`timeToPercent`、`percentToTime`。 |
 | `MessageAccessApi` | 只读 `getMessagesInTimeRange`（播放器支持时）。 |
 
@@ -429,6 +431,8 @@ const annotationExtension: RosViewExtension = {
 高级用法：在查看器内嵌的自定义 React 组件中订阅播放状态与解码消息。
 
 `useMessagePipeline` 适合订阅低频元数据，例如 presence、topics、bounds、progress、speed 和解码消息可用性。实时播放 UI 不应依赖 `playerState.activeData.currentTime`；请使用 `playback.subscribeCurrentTime()` 或 `playback.getCurrentTime()`。
+
+可见 Image 面板的解码或渲染进度落后于播放头时，会自动暂停共享播放时钟。恢复等待期间 `activeData.isPlaying` 仍为 `true`，`progress.renderBuffering` 为 `true`，而 `progress.buffering` 始终表示数据源或渲染缓冲的组合状态。
 
 ```ts
 import { useMessagePipeline } from '@ioai/rosview';

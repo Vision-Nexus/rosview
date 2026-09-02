@@ -354,6 +354,7 @@ export const DockviewLayout: React.FC<DockviewLayoutProps> = ({
             player={player}
             panelId={props.api.id}
             panelTitle={snapshot?.title ?? props.api.title ?? definition.defaultTitle}
+            panelApi={props.api}
             definition={definition}
             initialConfig={initialConfig}
             foxgloveType={snapshot?.foxgloveType}
