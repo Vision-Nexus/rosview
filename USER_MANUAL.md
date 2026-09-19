@@ -76,7 +76,7 @@ Click anywhere on the timeline to seek to that point. The semi-transparent regio
 
 #### 3.2 Playback speed
 
-Use the speed selector on the right of the playback bar: `0.1×` `0.25×` `0.5×` `1×` `2×` `4×` `8×` or **Max**.
+Use the speed selector on the right of the playback bar: `0.1×` `0.25×` `0.5×` `1×` `1.25×` `1.5×` `1.75×` `2×` `4×` `8×` or `10×`.
 
 #### 3.3 Step controls
 

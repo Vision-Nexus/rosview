@@ -89,7 +89,7 @@ Panel system requirements:
 | Capability | Description |
 |------------|-------------|
 | **Play/Pause** | Push messages in timestamp order |
-| **Speed control** | 0.1× / 0.25× / 0.5× / 1× / 2× / 4× / 8× / Max |
+| **Speed control** | 0.1× / 0.25× / 0.5× / 1× / 1.25× / 1.5× / 1.75× / 2× / 4× / 8× / 10× |
 | **Seek** | Click anywhere on the timeline; backfills the nearest message for each subscribed topic |
 | **Loop** | Automatically restart from the beginning on end-of-file |
 | **Step** | Forward/backward by one message or a fixed time step |

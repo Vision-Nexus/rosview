@@ -52,7 +52,7 @@ function percentToTime(percent: number, start: Time, end: Time): Time {
   return { sec, nsec };
 }
 
-const PRESET_SPEEDS = [0.1, 0.25, 0.5, 1, 2, 4, 8, 10] as const;
+const PRESET_SPEEDS = [0.1, 0.25, 0.5, 1, 1.25, 1.5, 1.75, 2, 4, 8, 10] as const;
 const PRESET_SAMPLING_FPS = [15, 30, 45] as const;
 
 const MENUBAR_PLAYBACK_SPEED = 'playback-menubar-speed';
