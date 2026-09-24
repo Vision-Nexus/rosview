@@ -2,6 +2,7 @@
   "panels.image.defaultTitle": "图像",
   "panels.image.warning.annotationGap": "部分视频帧缺少匹配的标注数据。",
   "panels.image.status.waitingForAnnotation": "正在缓冲，等待匹配的标注数据…",
+  "panels.image.status.noImageAtCurrentTime": "当前时刻没有图像",
   "panels.plot.defaultTitle": "图表",
   "panels.plot.toolbar.selectTopic": "选择 Topic…",
   "panels.plot.toolbar.resetZoom": "重置缩放",

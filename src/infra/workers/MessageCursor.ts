@@ -34,7 +34,6 @@ export class MessageCursor implements IMessageCursor<unknown> {
   private static readonly DEFAULT_MAX_BATCH_WALL_MS = 6;
   private static readonly DEFAULT_MAX_BUFFER_MESSAGES = 768;
   private static readonly DEFAULT_MAX_BUFFER_BYTES = 32 * 1024 * 1024;
-  private static readonly EMPTY_QUEUE_WAIT_MS = 50;
   private static readonly MAX_PUMP_SLICE_MESSAGES = 64;
   private static readonly MAX_PUMP_SLICE_WALL_MS = 8;
   private _iterator: AsyncIterableIterator<MessageEvent>;
@@ -91,7 +90,8 @@ export class MessageCursor implements IMessageCursor<unknown> {
     const startTime = Date.now();
     const waitStart = performance.now();
 
-    await this._waitForQueue(MessageCursor.EMPTY_QUEUE_WAIT_MS);
+    // An unresolved read is loading; an empty result is a known gap or EOF.
+    await this._waitForQueue();
     workerPerf.record("cursor.nextBatch.waitForQueue", performance.now() - waitStart);
     if (this._pumpError) {
       throw toThrownError(this._pumpError);
@@ -208,25 +208,12 @@ export class MessageCursor implements IMessageCursor<unknown> {
     return this._dequeue();
   }
 
-  private async _waitForQueue(timeoutMs?: number): Promise<void> {
+  private async _waitForQueue(): Promise<void> {
     if (this._pendingMessage || this._queue.length > 0 || this._done || this._closed || this._pumpError) {
       return;
     }
     await new Promise<void>((resolve) => {
-      const done = () => {
-        if (timeout != undefined) {
-          clearTimeout(timeout);
-        }
-        resolve();
-      };
-      const timeout =
-        timeoutMs == undefined
-          ? undefined
-          : setTimeout(() => {
-              this._queueWaiters = this._queueWaiters.filter((waiter) => waiter !== done);
-              resolve();
-            }, timeoutMs);
-      this._queueWaiters.push(done);
+      this._queueWaiters.push(resolve);
     });
   }
 

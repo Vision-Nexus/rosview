@@ -671,7 +671,9 @@ export const ImagePanel: React.FC<ImagePanelProps> = (props) => {
     } satisfies ImageRenderWorkerRequest);
   }, [backgroundColor, flipHorizontal, flipVertical, rotation, smoothing, fitMode]);
 
-  const statusText = getStatusText(status);
+  const statusText = status.phase === 'idle'
+    ? formatMessage({ id: 'panels.image.status.noImageAtCurrentTime' })
+    : getStatusText(status);
 
   return (
     <div
@@ -741,9 +743,6 @@ export const ImagePanel: React.FC<ImagePanelProps> = (props) => {
 };
 
 function getStatusText(status: ImageSurfaceStatus): string | null {
-  if (status.phase === 'idle') {
-    return 'Waiting for image data';
-  }
   if (status.phase === 'error') {
     return status.message ?? 'Image decode failed';
   }

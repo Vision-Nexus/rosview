@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import type { MessageEvent } from '@/core/types/ros';
 import { MessageCursor } from './MessageCursor';
@@ -40,6 +40,35 @@ async function flushAsyncWork(): Promise<void> {
 }
 
 describe('MessageCursor', () => {
+  it('keeps an empty batch pending until the source proves a gap or reaches EOF', async () => {
+    vi.useFakeTimers();
+    const ready = deferred<void>();
+    const frame = message(20);
+    const cursor = new MessageCursor((async function* () {
+      await ready.promise;
+      yield frame;
+    })(), { mode: 'comlink', binaryPayloadThresholdBytes: 64 * 1024 });
+    try {
+      let settled = false;
+      const batch = cursor.nextBatch(8_000, { endTime: { sec: 8, nsec: 0 } });
+      void batch.then(() => { settled = true; });
+      await vi.advanceTimersByTimeAsync(100);
+      expect(settled).toBe(false);
+
+      ready.resolve();
+      await vi.runAllTimersAsync();
+      await expect(batch).resolves.toEqual([]);
+      await expect(cursor.nextBatch(8_000, { endTime: { sec: 19, nsec: 0 } })).resolves.toEqual([]);
+      await expect(cursor.nextBatch(8_000, { endTime: { sec: 20, nsec: 0 } })).resolves.toEqual([frame]);
+      await expect(cursor.nextBatch(8_000, { endTime: { sec: 28, nsec: 0 } })).resolves.toEqual([]);
+    } finally {
+      ready.resolve();
+      await vi.runAllTimersAsync();
+      await cursor.end();
+      vi.useRealTimers();
+    }
+  });
+
   it('fills the worker-side queue in the background', async () => {
     const gates = [deferred<IteratorResult<MessageEvent>>(), deferred<IteratorResult<MessageEvent>>()];
     let calls = 0;

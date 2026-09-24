@@ -6,6 +6,7 @@ import type { Initialization, MessageEvent } from '@/core/types/ros';
 import type { PlayerState } from '@/core/types/player';
 import type { WorkerSerializedSource } from '@/infra/workers/WorkerSerializedSource';
 import type { SourceInitProgressCallback } from '@/infra/workers/types';
+import { MessageCursor } from '@/infra/workers/MessageCursor';
 
 const TOPIC = '/camera/front/image/compressed';
 
@@ -346,6 +347,64 @@ describe('IterablePlayer render backpressure', () => {
       clock.restore();
     }
   });
+  it('resumes after a slow read proves a video gap, then plays the first frame on time', async () => {
+    const clock = installManualClock();
+    const firstFrame = deferred<void>();
+    const frame = makeImageMessageAt(20);
+    const cursor = new MessageCursor((async function* () {
+      await firstFrame.promise;
+      yield frame;
+    })(), { mode: 'comlink', binaryPayloadThresholdBytes: 64 * 1024 });
+    const source = makeSource([]);
+    vi.mocked(source.initialize).mockResolvedValue({
+      ...makeInitialization(),
+      end: { sec: 25, nsec: 0 },
+    });
+    vi.mocked(source.getMessageCursor).mockResolvedValue(cursor);
+    const player = new IterablePlayer(source);
+    let latestState: PlayerState | undefined;
+    try {
+      player.setListener((state) => { latestState = state; });
+      await player.initialize({});
+      player.registerSubscriptions('panel', [{ topic: TOPIC, subscriberId: 'panel' }]);
+      await flushAsyncWork();
+      player.play();
+      clock.setNow(100);
+      clock.runNextRaf();
+      await flushAsyncWork();
+      clock.setNow(700);
+      clock.runNextRaf();
+      expect(player.getCurrentTime()).toEqual({ sec: 0, nsec: 100_000_000 });
+      expect(latestState?.progress.buffering).toBe(true);
+
+      firstFrame.resolve();
+      await flushAsyncWork();
+      expect(latestState?.progress.buffering).toBe(false);
+      clock.setNow(800);
+      clock.runNextRaf();
+      await flushAsyncWork();
+      expect(player.getCurrentTime()).toEqual({ sec: 0, nsec: 200_000_000 });
+      clock.setNow(2_000);
+      clock.runNextRaf();
+      await flushAsyncWork();
+      expect(player.getCurrentTime()).toEqual({ sec: 1, nsec: 400_000_000 });
+      expect(latestState?.progress.buffering).toBe(false);
+      expect(messageBus.getLastMessage(TOPIC)).toBeNull();
+
+      clock.setNow(20_600);
+      clock.runNextRaf();
+      await flushAsyncWork();
+      expect(player.getCurrentTime()).toEqual({ sec: 20, nsec: 0 });
+      expect(messageBus.getSubscriberMessages('panel')).toEqual([frame]);
+      expect(latestState?.progress.buffering).toBe(false);
+    } finally {
+      firstFrame.resolve();
+      player.close();
+      await cursor.end();
+      clock.restore();
+    }
+  });
+
 });
 
 describe('IterablePlayer high-frequency lane', () => {
@@ -1156,87 +1215,6 @@ describe('IterablePlayer playback clock', () => {
     }
   });
 
-  it('keeps one cursor across sparse topic windows and recovers from buffering', async () => {
-    let now = 0;
-    let nextRafId = 1;
-    const oldPerformanceNow = performance.now;
-    const oldRequestAnimationFrame = globalThis.requestAnimationFrame;
-    const oldCancelAnimationFrame = globalThis.cancelAnimationFrame;
-    const rafCallbacks = new Map<number, FrameRequestCallback>();
-    Object.defineProperty(performance, 'now', {
-      configurable: true,
-      value: () => now,
-    });
-    globalThis.requestAnimationFrame = vi.fn((cb: FrameRequestCallback) => {
-      const id = nextRafId++;
-      rafCallbacks.set(id, cb);
-      return id;
-    });
-    globalThis.cancelAnimationFrame = vi.fn((id: number) => {
-      rafCallbacks.delete(id);
-    });
-
-    const sparseMessage = makeImageMessageAtMs(900);
-    const sparseBatch = deferred<MessageEvent[]>();
-    const source = makeSource([]);
-    const cursor = {
-      nextBatch: vi.fn().mockResolvedValueOnce([]).mockResolvedValueOnce([]).mockReturnValueOnce(sparseBatch.promise),
-      end: vi.fn(async () => undefined),
-    };
-    vi.mocked(source.getMessageCursor).mockResolvedValue(cursor as never);
-    const player = new IterablePlayer(source);
-    let latestState: PlayerState | undefined;
-
-    const runNextRaf = () => {
-      const id = Math.min(...rafCallbacks.keys());
-      const callback = rafCallbacks.get(id);
-      rafCallbacks.delete(id);
-      callback?.(now);
-    };
-
-    try {
-      player.setListener((state) => {
-        latestState = state;
-      });
-      await player.initialize({});
-      player.registerSubscriptions('panel', [{ topic: TOPIC, subscriberId: 'panel' }]);
-      await flushAsyncWork();
-      player.play();
-
-      now = 100;
-      runNextRaf();
-      await flushAsyncWork();
-      now = 300;
-      runNextRaf();
-      await flushAsyncWork();
-      now = 600;
-      runNextRaf();
-      await Promise.resolve();
-
-      expect(cursor.nextBatch).toHaveBeenCalledTimes(3);
-      expect(cursor.end).not.toHaveBeenCalled();
-      expect(source.getMessageCursor).toHaveBeenCalledTimes(1);
-      expect(latestState?.progress.buffering).toBe(true);
-
-      sparseBatch.resolve([sparseMessage]);
-      await flushAsyncWork();
-      expect(latestState?.progress.buffering).toBe(false);
-
-      now = 1200;
-      runNextRaf();
-      await flushAsyncWork();
-
-      expect(messageBus.getSubscriberMessages('panel')).toEqual([sparseMessage]);
-    } finally {
-      player.close();
-      Object.defineProperty(performance, 'now', {
-        configurable: true,
-        value: oldPerformanceNow,
-      });
-      globalThis.requestAnimationFrame = oldRequestAnimationFrame;
-      globalThis.cancelAnimationFrame = oldCancelAnimationFrame;
-    }
-  });
 
   it('invalidates buffered messages when subscriptions change on the same topic', async () => {
     let now = 0;
@@ -1369,7 +1347,7 @@ describe('IterablePlayer playback clock', () => {
       runNextRaf();
       await flushAsyncWork();
 
-      expect(latestState?.progress.buffering).toBe(true);
+      expect(latestState?.progress.buffering).toBe(false);
       expect(player.getCurrentTime()).toEqual({ sec: 0, nsec: 600_000_000 });
 
       now = 1000;

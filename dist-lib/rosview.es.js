@@ -1,10 +1,10 @@
-import { a as e, d as t, f as n, i as r, l as i, n as a, o, p as s, r as c, s as l, t as u, u as d } from "./rafScheduler-D3aT-VUS.js";
+import { a as e, d as t, f as n, i as r, l as i, n as a, o, p as s, r as c, s as l, t as u, u as d } from "./rafScheduler-C-RI-sB9.js";
 import { t as f } from "./createLucideIcon-DDY8HuQR.js";
 import { $ as p, A as m, B as h, C as g, D as _, E as v, F as y, J as b, K as x, L as S, M as C, N as w, O as T, Q as E, R as D, S as O, T as k, X as ee, Y as A, Z as j, a as te, at as M, b as ne, ct as re, et as ie, g as ae, h as oe, i as se, it as ce, k as le, lt as ue, nt as de, ot as fe, rt as pe, st as me, t as he, tt as ge, ut as _e, v as ve, y as ye, z as be } from "./usePlotTopicDetection-CxdeJrHu.js";
 import { t as xe } from "./chevron-right-4pIadFHI.js";
-import { A as N, C as Se, D as Ce, E as we, F as Te, I as Ee, L as De, M as Oe, N as ke, O as Ae, P, R as je, S as Me, _ as Ne, a as Pe, b as Fe, c as Ie, d as Le, f as Re, g as ze, h as Be, i as Ve, j as He, k as Ue, l as We, m as Ge, n as Ke, o as qe, p as Je, r as Ye, s as Xe, t as Ze, u as Qe, v as $e, w as et, x as tt, y as nt } from "./TopicQuickPicker-djRSFqzq.js";
-import { _ as rt, a as it, b as at, c as F, d as ot, f as st, h as ct, i as lt, l as ut, m as dt, n as ft, o as I, p as pt, r as mt, s as ht, t as gt, u as _t, v as vt, x as yt, y as bt } from "./resizable-G3yGH-Qg.js";
-import { n as xt } from "./PanelTopicBar-qzF1HRU6.js";
+import { A as N, C as Se, D as Ce, E as we, F as Te, I as Ee, L as De, M as Oe, N as ke, O as Ae, P, R as je, S as Me, _ as Ne, a as Pe, b as Fe, c as Ie, d as Le, f as Re, g as ze, h as Be, i as Ve, j as He, k as Ue, l as We, m as Ge, n as Ke, o as qe, p as Je, r as Ye, s as Xe, t as Ze, u as Qe, v as $e, w as et, x as tt, y as nt } from "./TopicQuickPicker-CYSqzW_V.js";
+import { _ as rt, a as it, b as at, c as F, d as ot, f as st, h as ct, i as lt, l as ut, m as dt, n as ft, o as I, p as pt, r as mt, s as ht, t as gt, u as _t, v as vt, x as yt, y as bt } from "./resizable-NyCYK8tF.js";
+import { n as xt } from "./PanelTopicBar-rBu68YQj.js";
 import { _ as St, a as Ct, d as wt, f as Tt, h as Et, i as Dt, m as Ot, n as kt, o as At, p as jt, r as Mt, s as Nt, t as Pt, u as Ft } from "./rosMessageTypes-Di-HH75w.js";
 import { t as It } from "./messageBus-tPJ7Uycq.js";
 import { n as Lt } from "./useMessageBus-zT5FCuxY.js";
@@ -2460,7 +2460,7 @@ function Ms({ config: e, setConfig: t, topics: r }) {
 }
 //#endregion
 //#region src/features/panels/Image/definition.tsx
-var Ns = an(async () => ({ default: (await import("./ImagePanel-Bfzp4kia.js")).ImagePanel })), Ps = {
+var Ns = an(async () => ({ default: (await import("./ImagePanel-Cx6r0s89.js")).ImagePanel })), Ps = {
 	type: "Image",
 	defaultTitle: "Image",
 	schemaSupport: { supportedSchemas: [
@@ -2637,7 +2637,7 @@ function Ws({ config: e, setConfig: t, topics: r }) {
 }
 //#endregion
 //#region src/features/panels/JointStatePlot/definition.tsx
-var Gs = an(async () => ({ default: (await import("./JointStatePlotPanel-DaYgrHkN.js")).JointStatePlotComponent }));
+var Gs = an(async () => ({ default: (await import("./JointStatePlotPanel-Ct_Eb5ND.js")).JointStatePlotComponent }));
 function Ks(e) {
 	let t = It.getLastMessage(e);
 	if (!t?.message || typeof t.message != "object") return [];
@@ -3023,7 +3023,7 @@ function cc({ config: e, setConfig: t, topics: r }) {
 }
 //#endregion
 //#region src/features/panels/RawMessages/definition.tsx
-var lc = an(async () => ({ default: (await import("./RawMessagesPanel-DCV72u1w.js")).RawMessagesPanel })), uc = {
+var lc = an(async () => ({ default: (await import("./RawMessagesPanel-BZY1Q2Yh.js")).RawMessagesPanel })), uc = {
 	type: "RawMessages",
 	defaultTitle: "Raw",
 	createDefaultConfig: ac,
@@ -3439,7 +3439,7 @@ function xc({ config: e, setConfig: t, topics: r }) {
 }
 //#endregion
 //#region src/features/panels/ThreeD/definition.tsx
-var Sc = an(async () => ({ default: (await import("./ThreeDPanel-jSGw0tmR.js")).ThreeDPanel })), Cc = {
+var Sc = an(async () => ({ default: (await import("./ThreeDPanel-bYXVpPLK.js")).ThreeDPanel })), Cc = {
 	type: "3D",
 	defaultTitle: "3D View",
 	autoLayoutHints: { alwaysInclude: !0 },
@@ -3770,7 +3770,7 @@ function Lc({ config: e, setConfig: t, topics: r }) {
 }
 //#endregion
 //#region src/features/panels/Pose/definition.tsx
-var Rc = an(async () => ({ default: (await import("./PosePanel-Bdw_INoh.js")).PosePanel })), zc = {
+var Rc = an(async () => ({ default: (await import("./PosePanel-CaJV2cEp.js")).PosePanel })), zc = {
 	type: "Pose",
 	defaultTitle: "Pose",
 	schemaSupport: { supportedSchemas: [Ct] },
@@ -4469,7 +4469,7 @@ function yl({ config: e, setConfig: t, topics: i, player: a, panelId: o }) {
 }
 //#endregion
 //#region src/features/panels/Plot/definition.tsx
-var bl = an(async () => ({ default: (await import("./PlotPanel-B6KGKal-.js")).PlotPanel }));
+var bl = an(async () => ({ default: (await import("./PlotPanel-DbnHnJ5u.js")).PlotPanel }));
 function xl(e) {
 	if (!e.startsWith("/")) return {
 		topic: "",
@@ -4621,7 +4621,7 @@ function Al({ config: e, setConfig: t }) {
 }
 //#endregion
 //#region src/features/panels/TopicGraph/definition.tsx
-var jl = an(async () => ({ default: (await import("./TopicGraphPanel-Ck92ESmw.js")).TopicGraphPanel })), Ml = {
+var jl = an(async () => ({ default: (await import("./TopicGraphPanel-COO060J6.js")).TopicGraphPanel })), Ml = {
 	type: "TopicGraph",
 	defaultTitle: "Topic Graph",
 	createDefaultConfig: Ol,
@@ -4689,7 +4689,7 @@ function zl({ config: e, setConfig: t }) {
 }
 //#endregion
 //#region src/features/panels/Timeline/definition.tsx
-var Bl = an(async () => ({ default: (await import("./TimelinePanel-CkUuml2Z.js")).TimelinePanel })), Vl = {
+var Bl = an(async () => ({ default: (await import("./TimelinePanel-aOB9sPMq.js")).TimelinePanel })), Vl = {
 	type: "Timeline",
 	defaultTitle: "Timeline",
 	createDefaultConfig: Ll,
@@ -4860,7 +4860,7 @@ function Zl({ config: e, setConfig: t }) {
 }
 //#endregion
 //#region src/features/panels/Align/definition.tsx
-var Ql = an(async () => ({ default: (await import("./AlignPanel-DpqBXqi_.js")).AlignPanel })), $l = {
+var Ql = an(async () => ({ default: (await import("./AlignPanel-DGi9zwch.js")).AlignPanel })), $l = {
 	type: "Align",
 	defaultTitle: "Align",
 	createDefaultConfig: Kl,
@@ -5082,7 +5082,7 @@ function lu({ config: e, setConfig: t, topics: r }) {
 }
 //#endregion
 //#region src/features/panels/Audio/definition.tsx
-var uu = an(async () => ({ default: (await import("./AudioPanel-DPYnNTiF.js")).AudioPanel })), du = {
+var uu = an(async () => ({ default: (await import("./AudioPanel-B_OYdww0.js")).AudioPanel })), du = {
 	type: "Audio",
 	defaultTitle: "Audio",
 	schemaSupport: { supportedSchemas: [
@@ -5197,7 +5197,7 @@ function Su(e) {
 }
 //#endregion
 //#region src/features/panels/UrdfDebug/definition.tsx
-var Cu = an(async () => ({ default: (await import("./UrdfDebugPanel-B3Vod523.js")).UrdfDebugPanel })), wu = {
+var Cu = an(async () => ({ default: (await import("./UrdfDebugPanel-BLuOkWfd.js")).UrdfDebugPanel })), wu = {
 	type: "UrdfDebug",
 	defaultTitle: "URDF Debug",
 	createDefaultConfig: lt,
@@ -22624,7 +22624,6 @@ var UE = class {
 	_lastTickWallMs = 0;
 	_pageSuspended = !1;
 	_emptyBatchStreak = 0;
-	_emptyBatchStartedAtMs;
 	_cursorRebuildCount = 0;
 	_fallbackBackfillCount = 0;
 	_lastStaleRefreshMs = 0;
@@ -22901,7 +22900,7 @@ var UE = class {
 		this._rafId != null && (cancelAnimationFrame(this._rafId), this._rafId = void 0);
 	}
 	_advancePlaybackEpoch() {
-		return this._playbackEpoch += 1, this._prefetchRequestId += 1, this._prefetchPromise = void 0, this._prefetchStartedAtMs = void 0, this._lastPlaybackBufferRequestMs = -Infinity, this._prefetchedMessages = [], this._emptyBatchStreak = 0, this._emptyBatchStartedAtMs = void 0, this._setSourceBuffering(!1), this._updatePrefetchProgress(), this._playbackEpoch;
+		return this._playbackEpoch += 1, this._prefetchRequestId += 1, this._prefetchPromise = void 0, this._prefetchStartedAtMs = void 0, this._lastPlaybackBufferRequestMs = -Infinity, this._prefetchedMessages = [], this._emptyBatchStreak = 0, this._setSourceBuffering(!1), this._updatePrefetchProgress(), this._playbackEpoch;
 	}
 	_isPlaybackEpochCurrent(e) {
 		return e === this._playbackEpoch && this._state.presence !== "closed";
@@ -23083,29 +23082,28 @@ var UE = class {
 	}
 	async _tickAsync() {
 		if (!this._isPlaying || this._pageSuspended) return;
-		let e = performance.now(), t = this._prefetchStartedAtMs != null && e - this._prefetchStartedAtMs >= FE, n = this._emptyBatchStartedAtMs != null && e - this._emptyBatchStartedAtMs >= FE;
-		if (t && this._prefetchedMessages.length === 0) {
+		let e = performance.now();
+		if (this._prefetchStartedAtMs != null && e - this._prefetchStartedAtMs >= FE && this._prefetchedMessages.length === 0) {
 			this._setSourceBuffering(!0, !0), this._ensurePlaybackPrefetch(this._playbackEpoch, this._currentTime), this._scheduleNextTick();
 			return;
 		}
-		n && this._prefetchedMessages.length === 0 && this._setSourceBuffering(!0, !1);
-		let r = 1e3 / this._samplingFps;
-		if (e - this._lastTickWallMs < r) {
+		let t = 1e3 / this._samplingFps;
+		if (e - this._lastTickWallMs < t) {
 			this._scheduleNextTick();
 			return;
 		}
-		let i = this._playbackEpoch, a = this._clampToRange(this._clock.getTime(e));
-		if (this._updateRenderBuffering(a, e), this._isRenderBuffering || this._sourceClockHeld) {
+		let n = this._playbackEpoch, r = this._clampToRange(this._clock.getTime(e));
+		if (this._updateRenderBuffering(r, e), this._isRenderBuffering || this._sourceClockHeld) {
 			this._scheduleNextTick();
 			return;
 		}
 		this._lastTickWallMs = e;
-		let o = L(this._currentTime);
-		if (L(a) <= o) {
+		let i = L(this._currentTime);
+		if (L(r) <= i) {
 			this._scheduleNextTick();
 			return;
 		}
-		if (this._currentTime = a, this._clock.seek(this._currentTime, performance.now()), this._drainPrefetchedMessages(this._currentTime), this._scheduleStaleTopicsRefresh(e, i), this._initialization && L(this._currentTime) >= L(this._initialization.end)) {
+		if (this._currentTime = r, this._clock.seek(this._currentTime, performance.now()), this._drainPrefetchedMessages(this._currentTime), this._scheduleStaleTopicsRefresh(e, n), this._initialization && L(this._currentTime) >= L(this._initialization.end)) {
 			if (this._isLooping) {
 				let e = this._advancePlaybackEpoch();
 				if (this._currentTime = this._initialization.start, this._clock.seek(this._currentTime, performance.now()), this._resetRenderHealth(performance.now()), this._prioritizePlaybackBuffer(e, this._currentTime), await this._closePlaybackCursor(), !this._isPlaybackEpochCurrent(e)) return;
@@ -23125,7 +23123,7 @@ var UE = class {
 			this._currentTime = this._initialization.end, this._clock.seek(this._currentTime, performance.now()), this.pause(), this._notifyTimeSubscribers(this._currentTime);
 			return;
 		}
-		this._ensurePlaybackPrefetch(i, a), this._notifyTimeSubscribers(this._currentTime), this._maybeEmitPipelineState(), this._scheduleNextTick();
+		this._ensurePlaybackPrefetch(n, r), this._notifyTimeSubscribers(this._currentTime), this._maybeEmitPipelineState(), this._scheduleNextTick();
 	}
 	_playbackPrefetchTargetAheadMs() {
 		return Math.min(ME, Math.round(jE * this._speed));
@@ -23210,12 +23208,13 @@ var UE = class {
 				maxMessages: c
 			});
 			if (!this._isPlaybackEpochCurrent(e) || this._prefetchRequestId !== t || s !== this._cursor) return;
+			this._setSourceBuffering(!1);
 			let u = new Set(a), d = l.filter((e) => u.has(e.topic) && L(e.receiveTime) <= L(r));
 			if (d.length === 0) {
-				this._recordEmptyBatch(performance.now());
+				this._recordEmptyBatch();
 				return;
 			}
-			this._emptyBatchStreak = 0, this._emptyBatchStartedAtMs = void 0, this._prefetchedMessages.push(...d), this._prefetchedMessages.sort(IE), this._drainPrefetchedMessages(this._currentTime), this._updatePrefetchProgress(), this._isSourceBuffering && this._setSourceBuffering(!1), this._debugEnabled && console.debug("[Playback] nextBatch " + JSON.stringify({
+			this._emptyBatchStreak = 0, this._prefetchedMessages.push(...d), this._prefetchedMessages.sort(IE), this._drainPrefetchedMessages(this._currentTime), this._updatePrefetchProgress(), this._debugEnabled && console.debug("[Playback] nextBatch " + JSON.stringify({
 				durationMs: i,
 				count: d.length,
 				currentTime: this._currentTime,
@@ -23298,8 +23297,8 @@ var UE = class {
 			console.warn("IterablePlayer: load progress refresh failed", e);
 		}
 	}
-	_recordEmptyBatch(e) {
-		this._emptyBatchStreak += 1, this._emptyBatchStartedAtMs ??= e, this._state.progress = {
+	_recordEmptyBatch() {
+		this._emptyBatchStreak += 1, this._state.progress = {
 			...this._state.progress,
 			emptyBatchStreak: this._emptyBatchStreak,
 			cursorRebuildCount: this._cursorRebuildCount,
@@ -23504,22 +23503,22 @@ function nD(e) {
 }
 async function rD(e) {
 	if (e === "bvh") {
-		let { default: e } = await import("./bvh.worker-BVXeviYL.js");
+		let { default: e } = await import("./bvh.worker-rvvc6tg3.js");
 		return new e();
 	}
 	if (e === "bag") {
-		let { default: e } = await import("./bag.worker-C8HM2eLH.js");
+		let { default: e } = await import("./bag.worker-CO0shJVU.js");
 		return new e();
 	}
 	if (e === "db3") {
-		let { default: e } = await import("./db3.worker-Ca0SLO05.js");
+		let { default: e } = await import("./db3.worker-BBwrdvwz.js");
 		return new e();
 	}
 	if (e === "hdf5" || e === "h5") {
-		let { default: e } = await import("./hdf5.worker-Cym2FO4d.js");
+		let { default: e } = await import("./hdf5.worker-BhBc5IoS.js");
 		return new e();
 	}
-	let { default: t } = await import("./mcap.worker-ILw9-Tgz.js");
+	let { default: t } = await import("./mcap.worker-B_-lB6cH.js");
 	return new t();
 }
 async function iD(e, t, n) {
@@ -24834,7 +24833,7 @@ async function* mO(e) {
 		dO(e.signal);
 		let s = await fO(eD(), e.signal);
 		dO(e.signal);
-		let { default: c } = await fO(import("./mcap.worker-ILw9-Tgz.js"), e.signal);
+		let { default: c } = await fO(import("./mcap.worker-B_-lB6cH.js"), e.signal);
 		for (a = new YT(new c()), e.signal?.addEventListener("abort", l, { once: !0 }), await fO(a.initialize({
 			url: e.url,
 			knownTotalBytes: e.totalBytes,

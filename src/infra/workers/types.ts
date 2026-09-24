@@ -69,6 +69,7 @@ export type SourceInitProgressCallback = (progress: SourceInitProgress) => void;
 /** `T` is the deserialized message payload carried in {@link MessageEvent.message}. */
 export interface IMessageCursor<T = unknown> {
   next(): Promise<IteratorResult<MessageEvent<T>>>;
+  /** Waits for source data; an empty result means EOF or no messages through endTime. */
   nextBatch(
     durationMs: number,
     options?: { maxMessages?: number; maxWallTimeMs?: number; endTime?: Time },

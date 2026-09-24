@@ -181,7 +181,6 @@ export class IterablePlayer implements Player {
   private _lastTickWallMs = 0;
   private _pageSuspended = false;
   private _emptyBatchStreak = 0;
-  private _emptyBatchStartedAtMs: number | undefined;
   private _cursorRebuildCount = 0;
   private _fallbackBackfillCount = 0;
   private _lastStaleRefreshMs = 0;
@@ -725,7 +724,6 @@ export class IterablePlayer implements Player {
     this._lastPlaybackBufferRequestMs = Number.NEGATIVE_INFINITY;
     this._prefetchedMessages = [];
     this._emptyBatchStreak = 0;
-    this._emptyBatchStartedAtMs = undefined;
     this._setSourceBuffering(false);
     this._updatePrefetchProgress();
     return this._playbackEpoch;
@@ -1089,17 +1087,11 @@ export class IterablePlayer implements Player {
     const slowRead =
       this._prefetchStartedAtMs != undefined &&
       now - this._prefetchStartedAtMs >= PLAYBACK_BUFFERING_DELAY_MS;
-    const sustainedEmpty =
-      this._emptyBatchStartedAtMs != undefined &&
-      now - this._emptyBatchStartedAtMs >= PLAYBACK_BUFFERING_DELAY_MS;
     if (slowRead && this._prefetchedMessages.length === 0) {
       this._setSourceBuffering(true, true);
       this._ensurePlaybackPrefetch(this._playbackEpoch, this._currentTime);
       this._scheduleNextTick();
       return;
-    }
-    if (sustainedEmpty && this._prefetchedMessages.length === 0) {
-      this._setSourceBuffering(true, false);
     }
 
     const tickDurationMs = 1000 / this._samplingFps;
@@ -1370,25 +1362,23 @@ export class IterablePlayer implements Player {
       ) {
         return;
       }
+      // A completed window, including an empty one, no longer needs to hold playback.
+      this._setSourceBuffering(false);
       const requestedTopics = new Set(topics);
       const selectedMessages = messages.filter(
         (message) =>
           requestedTopics.has(message.topic) && toNano(message.receiveTime) <= toNano(endTime),
       );
       if (selectedMessages.length === 0) {
-        this._recordEmptyBatch(performance.now());
+        this._recordEmptyBatch();
         return;
       }
 
       this._emptyBatchStreak = 0;
-      this._emptyBatchStartedAtMs = undefined;
       this._prefetchedMessages.push(...selectedMessages);
       this._prefetchedMessages.sort(compareMessagesByReceiveTime);
       this._drainPrefetchedMessages(this._currentTime);
       this._updatePrefetchProgress();
-      if (this._isSourceBuffering) {
-        this._setSourceBuffering(false);
-      }
       if (this._debugEnabled) {
         console.debug("[Playback] nextBatch " + JSON.stringify({
           durationMs,
@@ -1570,9 +1560,8 @@ export class IterablePlayer implements Player {
     }
   }
 
-  private _recordEmptyBatch(nowMs: number): void {
+  private _recordEmptyBatch(): void {
     this._emptyBatchStreak += 1;
-    this._emptyBatchStartedAtMs ??= nowMs;
     this._state.progress = {
       ...this._state.progress,
       emptyBatchStreak: this._emptyBatchStreak,

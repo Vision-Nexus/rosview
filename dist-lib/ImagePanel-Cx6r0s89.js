@@ -1,6 +1,6 @@
-import { f as e, i as t, t as n } from "./rafScheduler-D3aT-VUS.js";
-import { t as r } from "./TopicQuickPicker-djRSFqzq.js";
-import { t as i } from "./PanelTopicBar-qzF1HRU6.js";
+import { f as e, i as t, t as n } from "./rafScheduler-C-RI-sB9.js";
+import { t as r } from "./TopicQuickPicker-CYSqzW_V.js";
+import { t as i } from "./PanelTopicBar-rBu68YQj.js";
 import { _ as a, c as o, d as s, g as c, h as l, l as u, m as d, n as f, o as p, p as m, r as h, v as g, y as _ } from "./imageAnnotations-DXWYifIU.js";
 import { a as ee, o as v, t as y } from "./time-BoEDgjoH.js";
 import { useEffect as b, useEffectEvent as te, useRef as x, useState as S } from "react";
@@ -704,7 +704,7 @@ var W = (a) => {
 		oe,
 		E
 	]);
-	let Me = ge(K);
+	let Me = K.phase === "idle" ? o({ id: "panels.image.status.noImageAtCurrentTime" }) : ge(K);
 	return /* @__PURE__ */ ne("div", {
 		className: "flex flex-col h-full overflow-hidden relative",
 		style: { background: y },
@@ -766,7 +766,7 @@ var W = (a) => {
 	});
 };
 function ge(e) {
-	return e.phase === "idle" ? "Waiting for image data" : e.phase === "error" ? e.message ?? "Image decode failed" : e.phase === "decoding" && !e.width && !e.height ? "Decoding latest frame..." : null;
+	return e.phase === "error" ? e.message ?? "Image decode failed" : e.phase === "decoding" && !e.width && !e.height ? "Decoding latest frame..." : null;
 }
 function _e(e, t) {
 	return e.phase === t.phase && e.width === t.width && e.height === t.height && e.encoding === t.encoding && e.message === t.message;

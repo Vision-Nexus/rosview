@@ -104,3 +104,16 @@ Loading multiple recording files together (any mix of `.mcap`/`.bag`/`.db3`/`.hd
 3. Drag `public/examples/test_multi_incremental.mcap` in on top of the already-loaded session; confirm the topic list grows to 3 topics and the playback range extends to 0-7s (the union), **without** switching away to a separate "Data" entry.
 4. Open the new topic's "more" menu (`⋯` in the sidebar Topics tab); confirm it shows a "Source: …" line naming both files once a topic name happens to be shared, or the single owning file otherwise.
 5. Optional, with the real `mcap` CLI installed and a large real-world recording on hand: split it into two files by topic/time range with `mcap filter in.mcap -o a.mcap -y /some/topic` (and a complementary `-n` regex for the rest), then load both together and confirm the merged topic count/time range match `mcap info` on the original file.
+
+## Playback gaps
+
+The playback clock spans the full recording, including intervals without messages for the selected
+topics. A cursor read stays pending until it can return messages, prove the requested window is empty,
+or reach the end of the source. A completed empty window does not show buffering or hold the clock.
+Image panels without a frame show "No image at the current time". Slow source reads and pending render
+work can still hold playback until that work finishes.
+
+When checking sparse MCAP playback, use a foreground tab with an early non-video message and a later
+video stream. The clock must advance through the gap without a buffering overlay, render video when
+its timestamps arrive, and resume without a time jump after a delayed read completes. Background-tab
+suspension is a separate clock hold and is not evidence of source buffering.
