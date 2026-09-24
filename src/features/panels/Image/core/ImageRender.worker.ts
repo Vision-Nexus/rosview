@@ -22,7 +22,8 @@ import {
   initialVideoPressureState,
   isVideoHardLimitExceeded,
   isRetrogradeMediaFrame,
-  shouldDropDecodedVideoFrame,
+  isSupersededVideoOutput,
+  isVideoStreamDiscontinuity,
   updateDecodeDurationEwma,
   updateVideoPressure,
   type VideoPressureState,
@@ -84,8 +85,15 @@ const DEFAULT_VIEWPORT: ImageViewport = {
 };
 
 const OUTPUT_TIMEOUT_MS = 5000;
+const WECODECS_CONFIG_TIMEOUT_MS = 3000;
 const METRICS_INTERVAL_MS = 1000;
 const VIDEO_RESYNC_COOLDOWN_MS = 200;
+/** Minimum spacing between bootstrap requests sent to the panel. */
+const VIDEO_BOOTSTRAP_REQUEST_COOLDOWN_MS = 1500;
+/** Wait briefly for an in-band random-access point before requesting recovery. */
+const VIDEO_RANDOM_ACCESS_WAIT_TIMEOUT_MS = 500;
+/** Report stalled playback instead of leaving a silent frozen canvas. */
+const VIDEO_STALL_REPORT_MS = 4000;
 
 // ---------- H.264 / H.265 decoder ----------
 
@@ -99,6 +107,7 @@ class WorkerVideoDecoder {
   #submitted = new Map<number, {
     frame: ImageWorkerFrameEnvelope;
     startedAt: number;
+    queueDepth: number;
     generation: number;
   }>();
   #callbacks: {
@@ -150,6 +159,10 @@ class WorkerVideoDecoder {
     return this.#submitted.size > 0 || this.decodeQueueSize > 0;
   }
 
+  public sweepPending(): void {
+    this.#sweepSubmitted();
+  }
+
   public async submitFrame(
     frame: ImageWorkerFrameEnvelope,
     data: Uint8Array<ArrayBuffer>,
@@ -177,6 +190,7 @@ class WorkerVideoDecoder {
       this.#submitted.set(timestamp, {
         frame,
         startedAt: performance.now(),
+        queueDepth: decoder.decodeQueueSize,
         generation,
       });
     }
@@ -189,6 +203,18 @@ class WorkerVideoDecoder {
     } catch (error) {
       this.#submitted.delete(timestamp);
       throw error;
+    }
+    this.#sweepSubmitted();
+  }
+
+  #sweepSubmitted(now = performance.now()): void {
+    for (const [timestamp, submitted] of this.#submitted) {
+      if (now - submitted.startedAt <= OUTPUT_TIMEOUT_MS) {
+        continue;
+      }
+      this.#submitted.delete(timestamp);
+      this.#callbacks.error(new Error('Video decode timed out'));
+      return;
     }
   }
 
@@ -208,7 +234,11 @@ class WorkerVideoDecoder {
       ];
       for (const candidate of candidates) {
         try {
-          const support = await VideoDecoder.isConfigSupported(candidate);
+          const support = await withTimeout(
+            VideoDecoder.isConfigSupported(candidate),
+            WECODECS_CONFIG_TIMEOUT_MS,
+            'VideoDecoder.isConfigSupported timed out',
+          );
           if (generation !== this.#generation) return false;
           if (support.supported) {
             supportedConfig = support.config ?? candidate;
@@ -236,7 +266,11 @@ class WorkerVideoDecoder {
         this.#callbacks.output({
           videoFrame: frame,
           sourceFrame: submitted.frame,
-          decodeMs: performance.now() - submitted.startedAt,
+          // Elapsed time also covers the wait behind frames already queued in
+          // the decoder, so amortise it to approximate per-frame decode cost.
+          // Without this the sample tracks pipeline latency and permanently
+          // reports overload on healthy multi-stream playback.
+          decodeMs: (performance.now() - submitted.startedAt) / (submitted.queueDepth + 1),
         });
       },
       error: (error) => this.#callbacks.error(new Error(String(error))),
@@ -264,7 +298,7 @@ class WorkerVideoDecoder {
  * Cached state for the last successfully decoded frame.
  * - Raw frames retain the source pixel bytes so rawDecodeOptions changes
  *   can re-decode without a new incoming frame.
- * - Compressed / h264 frames retain an ImageBitmap so renderOptions /
+ * - Compressed-video frames retain an ImageBitmap so renderOptions /
  *   viewport changes can redraw without re-decoding.
  */
 type CachedFrame =
@@ -322,9 +356,17 @@ class ImageRenderWorkerRuntime {
   #videoPressure: VideoPressureState = initialVideoPressureState();
   #videoDecodeMs = 0;
   #videoWaitingForRandomAccess = false;
+  #videoWaitingForRandomAccessSince: number | null = null;
   #videoConfigBeforeRandomAccess: ImageWorkerFrameEnvelope[] = [];
   #videoRecentConfig: ImageWorkerFrameEnvelope[] = [];
-  #videoNeedsResync = false;
+  /** Bootstrap GOP frames cannot be trimmed while their dependency chain drains. */
+  #videoProtectedQueueCount = 0;
+  #lastVideoEnqueuedTimeNs: bigint | null = null;
+  #videoFrameIntervalMs = 0;
+  #lastVideoBootstrapRequestAt = -Infinity;
+  /** Wall clock of the last visible progress, used by the stall watchdog. */
+  #videoProgressAt: number | null = null;
+  #videoStallReported = false;
   #lastVideoRenderAt = -Infinity;
   #lastVideoBitmapAt = -Infinity;
   #droppedVideoFrames = 0;
@@ -394,6 +436,7 @@ class ImageRenderWorkerRuntime {
         this.#isPlaying = message.isPlaying;
         this.#updateVideoPressure();
         this.#trimPendingVideoFramesIfNeeded();
+        this.#reportVideoStallIfDue();
         this.#emitMetricsIfDue();
         return;
 
@@ -425,6 +468,7 @@ class ImageRenderWorkerRuntime {
         this.#epoch += 1;
         this.#pendingFrame = null;
         this.#pendingVideoFrames = [];
+        this.#videoProtectedQueueCount = 0;
         this.#disposePendingVideoOutput();
         this.#haltUntilReset = false;
         this.#resetVideoRuntimeState();
@@ -443,6 +487,7 @@ class ImageRenderWorkerRuntime {
         this.#epoch += 1;
         this.#pendingFrame = null;
         this.#pendingVideoFrames = [];
+        this.#videoProtectedQueueCount = 0;
         this.#disposePendingVideoOutput();
         this.#haltUntilReset = false;
         this.#decoder.dispose();
@@ -464,8 +509,13 @@ class ImageRenderWorkerRuntime {
     this.#epoch += 1;
     this.#pendingFrame = null;
     this.#pendingVideoFrames = [];
+    this.#videoProtectedQueueCount = 0;
     this.#disposePendingVideoOutput();
     this.#haltUntilReset = false;
+    if (this.#activeVideoCodec !== codec) {
+      this.#videoRecentConfig = [];
+      this.#videoConfigBeforeRandomAccess = [];
+    }
     this.#activeVideoCodec = codec;
     this.#resetVideoRuntimeState();
     this.#decoder.reset();
@@ -483,7 +533,7 @@ class ImageRenderWorkerRuntime {
       videoFrames.length === 0 ||
       !videoFrames.some((frame) => containsVideoRandomAccessNal(codec, frame.data))
     ) {
-      this.#videoWaitingForRandomAccess = true;
+      this.#beginWaitForRandomAccess();
       this.#emitMetricsIfDue(true);
       this.#emitRenderHealth(true);
       return;
@@ -492,6 +542,7 @@ class ImageRenderWorkerRuntime {
     for (const frame of videoFrames) {
       this.#enqueueVideoFrame(frame, { applyBackpressure: false });
     }
+    this.#videoProtectedQueueCount = this.#pendingVideoFrames.length;
 
     this.#emitMetricsIfDue(true);
     this.#emitRenderHealth(true);
@@ -504,12 +555,14 @@ class ImageRenderWorkerRuntime {
   ): void {
     const codec = videoCodecForFrame(frame);
     if (!codec) return;
+    const live = options.applyBackpressure !== false;
     if (this.#activeVideoCodec !== codec) {
       this.#activeVideoCodec = codec;
       this.#pendingVideoFrames = [];
+      this.#videoProtectedQueueCount = 0;
       this.#videoRecentConfig = [];
       this.#videoConfigBeforeRandomAccess = [];
-      this.#videoWaitingForRandomAccess = true;
+      this.#beginWaitForRandomAccess();
       this.#resyncVideoDecoder();
     }
     this.#videoRecentConfig = updateVideoConfigPackets(
@@ -517,6 +570,8 @@ class ImageRenderWorkerRuntime {
       this.#videoRecentConfig,
       frame,
     );
+    if (live) this.#trackVideoCadence(frame, codec);
+
     if (this.#videoWaitingForRandomAccess && !containsVideoRandomAccessNal(codec, frame.data)) {
       if (isVideoConfigOnly(codec, frame.data)) {
         this.#videoConfigBeforeRandomAccess = updateVideoConfigPackets(
@@ -527,22 +582,92 @@ class ImageRenderWorkerRuntime {
         return;
       }
       this.#droppedVideoFrames += 1;
-      if (options.applyBackpressure !== false) this.#emitMetricsIfDue();
+      if (live) {
+        this.#requestVideoBootstrapIfRandomAccessWaitStalled();
+        this.#emitMetricsIfDue();
+      }
       return;
     }
+
     if (containsVideoRandomAccessNal(codec, frame.data)) {
-      this.#videoWaitingForRandomAccess = false;
+      this.#clearWaitForRandomAccess();
       if (this.#videoConfigBeforeRandomAccess.length > 0) {
         this.#pendingVideoFrames.push(...this.#videoConfigBeforeRandomAccess);
         this.#videoConfigBeforeRandomAccess = [];
       }
     }
     this.#pendingVideoFrames.push(frame);
-    if (options.applyBackpressure !== false) {
+    if (live) {
       this.#updateVideoPressure();
       this.#trimPendingVideoFramesIfNeeded();
       this.#emitMetricsIfDue();
     }
+  }
+
+  #trackVideoCadence(frame: ImageWorkerFrameEnvelope, codec: VideoCodec): void {
+    const frameTimeNs = timeToKey(frame.receiveTime);
+    const previousNs = this.#lastVideoEnqueuedTimeNs;
+    this.#lastVideoEnqueuedTimeNs = frameTimeNs;
+    if (previousNs == null) {
+      this.#videoProgressAt ??= performance.now();
+      return;
+    }
+    const gapMs = Number(frameTimeNs - previousNs) / 1_000_000;
+    if (gapMs <= 0) return;
+    if (
+      !containsVideoRandomAccessNal(codec, frame.data) &&
+      isVideoStreamDiscontinuity(gapMs, this.#videoFrameIntervalMs)
+    ) {
+      this.#droppedVideoFrames += this.#pendingVideoFrames.length;
+      this.#pendingVideoFrames = [];
+      this.#videoProtectedQueueCount = 0;
+      this.#beginWaitForRandomAccess();
+      this.#resyncVideoDecoder();
+      this.#requestVideoBootstrap();
+      return;
+    }
+    this.#videoFrameIntervalMs = updateDecodeDurationEwma(this.#videoFrameIntervalMs, gapMs);
+  }
+
+  #beginWaitForRandomAccess(): void {
+    this.#videoWaitingForRandomAccess = true;
+    this.#videoWaitingForRandomAccessSince = performance.now();
+    this.#videoConfigBeforeRandomAccess = [...this.#videoRecentConfig];
+  }
+
+  #clearWaitForRandomAccess(): void {
+    this.#videoWaitingForRandomAccess = false;
+    this.#videoWaitingForRandomAccessSince = null;
+  }
+
+  /** Request a preceding random-access batch instead of waiting for an in-band keyframe. */
+  #requestVideoBootstrap(): void {
+    const now = performance.now();
+    if (now - this.#lastVideoBootstrapRequestAt < VIDEO_BOOTSTRAP_REQUEST_COOLDOWN_MS) {
+      return;
+    }
+    this.#lastVideoBootstrapRequestAt = now;
+    workerScope.postMessage({ type: 'needsBootstrap' } satisfies ImageRenderWorkerEvent);
+  }
+
+  #requestVideoBootstrapIfRandomAccessWaitStalled(): void {
+    const since = this.#videoWaitingForRandomAccessSince;
+    if (since == null || performance.now() - since < VIDEO_RANDOM_ACCESS_WAIT_TIMEOUT_MS) return;
+    this.#requestVideoBootstrap();
+  }
+
+  #reportVideoStallIfDue(): void {
+    const progressAt = this.#videoProgressAt;
+    if (progressAt == null || !this.#isPlaying) return;
+    if (performance.now() - progressAt < VIDEO_STALL_REPORT_MS || this.#videoStallReported) return;
+    this.#videoStallReported = true;
+    this.#emitStatus({ phase: 'stalled' });
+    this.#requestVideoBootstrap();
+  }
+
+  #noteVideoProgress(): void {
+    this.#videoProgressAt = performance.now();
+    this.#videoStallReported = false;
   }
 
   #enqueueFrame(frame: ImageWorkerFrameEnvelope): void {
@@ -554,6 +679,7 @@ class ImageRenderWorkerRuntime {
   }
 
   #trimPendingVideoFramesIfNeeded(): void {
+    if (this.#videoProtectedQueueCount > 0) return;
     const queueSpanMs = videoQueueSpanMs(this.#pendingVideoFrames);
     const hardLimitExceeded = isVideoHardLimitExceeded(
       this.#pendingVideoFrames.length,
@@ -591,9 +717,6 @@ class ImageRenderWorkerRuntime {
     }
 
     if (!selection.resync) {
-      // No newer complete GOP exists. Preserve every dependent delta in the
-      // current GOP while pressure is soft. The hard-limit branch above drops
-      // the complete backlog rather than decoding a truncated dependency chain.
       return;
     }
   }
@@ -602,16 +725,18 @@ class ImageRenderWorkerRuntime {
     const plan = applyVideoHardLimit(this.#pendingVideoFrames, true);
     this.#droppedVideoFrames += plan.droppedFrames;
     this.#pendingVideoFrames = plan.frames;
-    this.#videoWaitingForRandomAccess = true;
-    this.#videoConfigBeforeRandomAccess = [...this.#videoRecentConfig];
+    this.#videoProtectedQueueCount = 0;
+    this.#beginWaitForRandomAccess();
     this.#resyncVideoDecoder();
     this.#updateVideoPressure();
     this.#emitMetricsIfDue(true);
+    this.#requestVideoBootstrap();
   }
 
   #takeNextFrame(): ImageWorkerFrameEnvelope | null {
     const videoFrame = this.#pendingVideoFrames.shift();
     if (videoFrame) {
+      if (this.#videoProtectedQueueCount > 0) this.#videoProtectedQueueCount -= 1;
       return videoFrame;
     }
     const frame = this.#pendingFrame;
@@ -642,14 +767,11 @@ class ImageRenderWorkerRuntime {
         if (epoch !== this.#epoch) {
           break;
         }
-        if (isVideoFrame(frame) && this.#videoNeedsResync) {
-          this.#resyncVideoDecoder();
-          this.#videoNeedsResync = false;
-        }
         await this.#decodeAndRender(frame, epoch);
         if (this.#haltUntilReset) {
           this.#pendingFrame = null;
           this.#pendingVideoFrames = [];
+          this.#videoProtectedQueueCount = 0;
           break;
         }
       }
@@ -794,20 +916,18 @@ class ImageRenderWorkerRuntime {
     this.#lastDecodedVideoTimeNs = frameTimeNs;
     this.#videoDecodeMs = updateDecodeDurationEwma(this.#videoDecodeMs, output.decodeMs);
 
-    if (
-      this.#isPlaying &&
-      shouldDropDecodedVideoFrame(this.#playbackTimeNs, frameTimeNs)
-    ) {
-      output.videoFrame.close();
-      this.#droppedVideoFrames += 1;
-      this.#updateVideoPressure();
-      this.#emitMetricsIfDue();
-      this.#emitRenderHealth();
-      return;
-    }
-
-    if (this.#pendingDecodedVideo) {
-      this.#pendingDecodedVideo.videoFrame.close();
+    // Pipeline latency alone does not make an output disposable. Keep the
+    // newest decoded frame unless an equal-or-newer output already awaits paint.
+    const pending = this.#pendingDecodedVideo;
+    if (pending) {
+      if (isSupersededVideoOutput(frameTimeNs, timeToKey(pending.sourceFrame.receiveTime))) {
+        output.videoFrame.close();
+        this.#droppedVideoFrames += 1;
+        this.#updateVideoPressure();
+        this.#emitMetricsIfDue();
+        return;
+      }
+      pending.videoFrame.close();
       this.#droppedVideoFrames += 1;
     }
     this.#pendingDecodedVideo = {
@@ -852,34 +972,28 @@ class ImageRenderWorkerRuntime {
     const epoch = this.#epoch;
     const now = performance.now();
     try {
-      const frameTimeNs = timeToKey(sourceFrame.receiveTime);
-      if (
-        this.#isPlaying &&
-        shouldDropDecodedVideoFrame(this.#playbackTimeNs, frameTimeNs)
-      ) {
-        this.#droppedVideoFrames += 1;
-        return;
-      }
-
       const width = videoFrame.displayWidth || videoFrame.codedWidth;
       const height = videoFrame.displayHeight || videoFrame.codedHeight;
-      if (!this.#drawCanvasImageSource(
-        videoFrame,
-        width,
-        height,
-        sourceFrame.receiveTime,
-        sourceFrame.annotation,
-      )) {
+      if (
+        !this.#drawCanvasImageSource(
+          videoFrame,
+          width,
+          height,
+          sourceFrame.receiveTime,
+          sourceFrame.annotation,
+        )
+      ) {
         this.#droppedVideoFrames += 1;
         return;
       }
       this.#lastVideoRenderAt = now;
       this.#renderedVideoFrames += 1;
+      this.#noteVideoProgress();
       this.#emitStatus({
         phase: 'ready',
         width,
         height,
-        encoding: sourceFrame.kind === 'compressed' ? sourceFrame.format : (this.#activeVideoCodec ?? 'h264'),
+        encoding: sourceFrame.kind === 'compressed' ? sourceFrame.format : (this.#activeVideoCodec ?? 'video'),
         receiveTime: sourceFrame.receiveTime,
       });
 
@@ -893,7 +1007,7 @@ class ImageRenderWorkerRuntime {
             bitmap,
             width,
             height,
-            sourceFrame.kind === 'compressed' ? sourceFrame.format : (this.#activeVideoCodec ?? 'h264'),
+            sourceFrame.kind === 'compressed' ? sourceFrame.format : (this.#activeVideoCodec ?? 'video'),
             sourceFrame.receiveTime,
             sourceFrame.annotation,
           );
@@ -913,6 +1027,7 @@ class ImageRenderWorkerRuntime {
   }
 
   #handleVideoDecoderError(error: Error): void {
+    console.warn('ImageRenderWorker: video decode failed', error);
     this.#resyncVideoDecoder();
     const codec = this.#activeVideoCodec;
     const recovery = codec
@@ -925,14 +1040,16 @@ class ImageRenderWorkerRuntime {
       : { frames: [], droppedFrames: this.#pendingVideoFrames.length, resync: false };
     if (recovery.resync) {
       this.#pendingVideoFrames = recovery.frames;
-      this.#videoWaitingForRandomAccess = false;
+      this.#videoProtectedQueueCount = 0;
+      this.#clearWaitForRandomAccess();
       this.#droppedVideoFrames += recovery.droppedFrames;
       void this.#drainLatestFrame();
     } else {
       this.#droppedVideoFrames += this.#pendingVideoFrames.length;
       this.#pendingVideoFrames = [];
-      this.#videoWaitingForRandomAccess = true;
-      this.#videoConfigBeforeRandomAccess = [...this.#videoRecentConfig];
+      this.#videoProtectedQueueCount = 0;
+      this.#beginWaitForRandomAccess();
+      this.#requestVideoBootstrap();
     }
     if (this.#renderedVideoFrames === 0 && !this.#cachedFrame) {
       this.#emitStatus({ phase: 'error', message: error.message });
@@ -944,7 +1061,6 @@ class ImageRenderWorkerRuntime {
   #resyncVideoDecoder(): void {
     this.#decoder.reset();
     this.#disposePendingVideoOutput();
-    this.#videoNeedsResync = false;
     this.#videoResyncCount += 1;
     this.#lastVideoResyncAt = performance.now();
   }
@@ -979,11 +1095,15 @@ class ImageRenderWorkerRuntime {
   #resetVideoRuntimeState(): void {
     this.#videoPressure = initialVideoPressureState();
     this.#videoDecodeMs = 0;
-    // After close()/configure(), WebCodecs requires a fresh random-access unit.
-    // Keep recent VPS/SPS/PPS or SPS/PPS so a bare random-access frame can reconfigure.
-    this.#videoWaitingForRandomAccess = true;
-    this.#videoConfigBeforeRandomAccess = [...this.#videoRecentConfig];
-    this.#videoNeedsResync = false;
+    // WebCodecs needs a fresh random-access unit after its decoder is reset.
+    // Keep recent codec configuration so a bare keyframe can reconfigure it.
+    this.#beginWaitForRandomAccess();
+    this.#videoProtectedQueueCount = 0;
+    this.#lastVideoEnqueuedTimeNs = null;
+    this.#videoFrameIntervalMs = 0;
+    this.#videoProgressAt = null;
+    this.#videoStallReported = false;
+    // Preserve the bootstrap cooldown across reset to avoid request loops.
     this.#lastVideoRenderAt = -Infinity;
     this.#lastVideoBitmapAt = -Infinity;
     this.#droppedVideoFrames = 0;
@@ -996,6 +1116,7 @@ class ImageRenderWorkerRuntime {
   }
 
   #emitMetricsIfDue(force = false): void {
+    this.#decoder.sweepPending();
     const now = performance.now();
     if (!force && now - this.#lastMetricsAt < METRICS_INTERVAL_MS) {
       return;
@@ -1015,6 +1136,7 @@ class ImageRenderWorkerRuntime {
       decodeQueueSize: this.#decoder.decodeQueueSize,
       mediaLagMs,
       resyncCount: this.#videoResyncCount,
+      waitingForRandomAccess: this.#videoWaitingForRandomAccess,
       codec: this.#decoder.codec,
     };
     workerScope.postMessage({ type: 'metrics', metrics } satisfies ImageRenderWorkerEvent);
@@ -1445,5 +1567,13 @@ const runtime = new ImageRenderWorkerRuntime();
 const workerScope = self as unknown as DedicatedWorkerGlobalScope;
 
 workerScope.onmessage = (event: MessageEvent<ImageRenderWorkerRequest>) => {
-  runtime.handle(event.data);
+  try {
+    runtime.handle(event.data);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    workerScope.postMessage({
+      type: 'status',
+      status: { phase: 'error', message },
+    } satisfies ImageRenderWorkerEvent);
+  }
 };

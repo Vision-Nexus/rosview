@@ -115,11 +115,6 @@ export const RosViewContent: React.FC<RosViewContentProps> = ({
   const { formatMessage } = useIntl();
   const presence = useMessagePipeline((state: MessagePipelineState) => state.playerState.presence);
   const sortedTopics = useMessagePipeline((state: MessagePipelineState) => state.sortedTopics);
-  const playbackBuffering = useMessagePipeline(
-    (state: MessagePipelineState) =>
-      state.playerState.activeData?.isPlaying === true &&
-      state.playerState.progress.buffering === true,
-  );
   const isReady = presence === 'ready';
   const showWelcomeFallback = !isReady && Boolean(manualOpenHint);
   const topicDragDepthRef = useRef(0);
@@ -379,8 +374,9 @@ export const RosViewContent: React.FC<RosViewContentProps> = ({
                     sourceName={loadingSourceName}
                     onCancel={onCancelLoading}
                   />
-                ) : null}
-                {isReady && playbackBuffering ? <PlaybackBufferingOverlay /> : null}
+                ) : (
+                  <PlaybackBufferingOverlay player={player} />
+                )}
               </main>
             </ResizablePanel>
           </ResizablePanelGroup>

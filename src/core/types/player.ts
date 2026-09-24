@@ -6,6 +6,7 @@ export interface GetMessagesInTimeRangeArgs {
   start: Time;
   end: Time;
   topics: string[];
+  signal?: AbortSignal;
 }
 
 export interface StreamMessagesInTimeRangeArgs extends GetMessagesInTimeRangeArgs {
@@ -74,6 +75,8 @@ export interface PlayerState {
     buffering?: boolean;
     /** Playback is held because at least one visible image panel has stalled rendering. */
     renderBuffering?: boolean;
+    /** Retryable playback-time error, distinct from initialization problems. */
+    playbackError?: string;
     /** Estimated continuous local buffer ahead of the current playback time. */
     bufferedAheadMs?: number;
     /** Decoded-message look-ahead beyond the current playhead. */

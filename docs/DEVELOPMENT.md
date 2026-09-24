@@ -61,12 +61,13 @@ so Vite serves static files and Range requests correctly.
 
 ### Automated checks
 
-- `npm run lint`, `npm run test`, `npm run build` (SPA), `npm run build:lib` (when validating the npm bundle), `npm run test:e2e` (with fixtures).
-- CI: see `.github/workflows/ci.yml` (Node version should match `package.json` `engines`).
+- `npm run lint`, `npm run test`, `npm run build` (SPA), `npm run build:lib` (npm bundle), `npm run test:e2e` (with fixtures).
+- `npm audit` (CI fails on high/critical). Bundled runtime advisories are product issues even though those packages sit in `devDependencies`; see `SECURITY.md`.
+- CI: see `.github/workflows/ci.yml`. Runners use Node 24 (`.nvmrc`). Published `engines.node` is `>=18` so embedders are not tied to the CI Node version.
 
 ### WASM re-evaluation
 
-Prefer main-thread rendering and subscription tuning before MCAP-parse WASM. Consider a WASM PoC only if worker traces show deserialize dominating, main-thread R3F cost is already low, and message latency still needs improvement.
+Prefer main-thread rendering and subscription tuning before MCAP-parse WASM. Consider a WASM PoC only if worker traces show deserialize dominating, main-thread 3D render cost is already low, and message latency still needs improvement.
 
 ## Acceptance (multi-source MCAP)
 

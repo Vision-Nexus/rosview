@@ -4,9 +4,11 @@ import {
   VIDEO_MAX_PENDING_SPAN_MS,
   decodedFrameLatenessMs,
   initialVideoPressureState,
-  isVideoHardLimitExceeded,
   isRetrogradeMediaFrame,
-  shouldDropDecodedVideoFrame,
+  isSupersededVideoOutput,
+  isVideoHardLimitExceeded,
+  isVideoStreamDiscontinuity,
+  type VideoPressureState,
   updateDecodeDurationEwma,
   updateVideoPressure,
 } from './videoBackpressure';
@@ -84,7 +86,7 @@ describe('video adaptive backpressure', () => {
   it('uses actual media lag instead of playback speed', () => {
     const overloaded = updateVideoPressure(initialVideoPressureState(), {
       ...healthy,
-      mediaLagMs: 400,
+      mediaLagMs: 2_000,
     });
     const capable = updateVideoPressure(initialVideoPressureState(), healthy);
 
@@ -92,12 +94,43 @@ describe('video adaptive backpressure', () => {
     expect(capable.mode).toBe('normal');
   });
 
-  it('drops decoded output only after it misses the media deadline', () => {
+  it('ignores steady transport latency so a bounded pipeline stays normal', () => {
+    // Six 720p streams decode with a few hundred ms of constant transport
+    // latency while the queues stay empty. That is not overload.
+    const transportLatency = { ...healthy, mediaLagMs: 260 };
+    let state = initialVideoPressureState();
+    for (let i = 0; i < 30; i += 1) {
+      state = updateVideoPressure(state, transportLatency);
+    }
+    expect(state.mode).toBe('normal');
+  });
+
+  it('recovers from degraded while transport latency stays high', () => {
+    // Regression: gating recovery on media lag pinned the panel in degraded
+    // mode for the whole session, permanently halving the render rate.
+    let state: VideoPressureState = {
+      mode: 'degraded',
+      healthySamples: 0,
+    };
+    const laggyButIdle = { ...healthy, mediaLagMs: 260 };
+    for (let i = 0; i < 20; i += 1) {
+      state = updateVideoPressure(state, laggyButIdle);
+    }
+    expect(state.mode).toBe('normal');
+  });
+
+  it('never discards a decoded frame that nothing newer supersedes', () => {
     const playback = 1_000_000_000n;
     expect(decodedFrameLatenessMs(playback, 950_000_000n)).toBe(50);
-    expect(shouldDropDecodedVideoFrame(playback, 900_000_000n)).toBe(false);
-    expect(shouldDropDecodedVideoFrame(playback, 850_000_000n)).toBe(true);
-    expect(shouldDropDecodedVideoFrame(null, 0n)).toBe(false);
+    expect(decodedFrameLatenessMs(playback, 700_000_000n)).toBe(300);
+    expect(isSupersededVideoOutput(700_000_000n, null)).toBe(false);
+    expect(isSupersededVideoOutput(0n, null)).toBe(false);
+  });
+
+  it('discards a decoded frame only for an equal-or-newer pending frame', () => {
+    expect(isSupersededVideoOutput(900_000_000n, 950_000_000n)).toBe(true);
+    expect(isSupersededVideoOutput(900_000_000n, 900_000_000n)).toBe(true);
+    expect(isSupersededVideoOutput(950_000_000n, 900_000_000n)).toBe(false);
   });
 
   it('rejects backward frame paints only during playback', () => {
@@ -106,5 +139,15 @@ describe('video adaptive backpressure', () => {
     expect(isRetrogradeMediaFrame(true, 1_000n, 1_001n)).toBe(false);
     expect(isRetrogradeMediaFrame(false, 1_000n, 999n)).toBe(false);
     expect(isRetrogradeMediaFrame(true, null, 999n)).toBe(false);
+  });
+
+  it('detects stream discontinuities from the observed frame cadence', () => {
+    expect(isVideoStreamDiscontinuity(33, 33)).toBe(false);
+    expect(isVideoStreamDiscontinuity(66, 33)).toBe(false);
+    expect(isVideoStreamDiscontinuity(5_000, 33)).toBe(true);
+    expect(isVideoStreamDiscontinuity(500, 500)).toBe(false);
+    expect(isVideoStreamDiscontinuity(2_100, 500)).toBe(true);
+    expect(isVideoStreamDiscontinuity(5_000, 0)).toBe(false);
+    expect(isVideoStreamDiscontinuity(0, 33)).toBe(false);
   });
 });

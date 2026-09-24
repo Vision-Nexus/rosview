@@ -98,6 +98,8 @@ export interface ImageRenderMetrics {
   decodeQueueSize: number;
   mediaLagMs: number;
   resyncCount: number;
+  /** True while every incoming frame is discarded pending a random-access point. */
+  waitingForRandomAccess: boolean;
   codec?: string;
 }
 
@@ -122,4 +124,12 @@ export type ImageRenderWorkerEvent =
       type: 'renderHealth';
       generation: number;
       pending: boolean;
+    }
+  /**
+   * The worker cannot resume decoding from the frames it has. The panel should
+   * fetch a bootstrap batch starting at the nearest random-access point before
+   * the playhead rather than wait for a possibly distant in-band keyframe.
+   */
+  | {
+      type: 'needsBootstrap';
     };

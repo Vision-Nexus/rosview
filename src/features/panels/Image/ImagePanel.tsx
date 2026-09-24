@@ -23,7 +23,12 @@ import {
   FrameAnnotationPairer,
   type ImageFrameAnnotationPair,
 } from './core/frameAnnotationPairer';
-import { isVideoMessageEvent, toWorkerFrame, videoCodecForMessageEvent } from './core/messageFrameAdapter';
+import {
+  isVideoMessageEvent,
+  toWorkerFrame,
+  videoCodecForMessageEvent,
+} from './core/messageFrameAdapter';
+import { pushVideoLiveEvent } from './core/videoLiveBuffer';
 import { applyDepthTopicPreset } from './core/depthColorDefaults';
 import type { ImageConfig } from './defaults';
 import { TopicQuickPicker } from '../framework/TopicQuickPicker';
@@ -102,6 +107,9 @@ export const ImagePanel: React.FC<ImagePanelProps> = (props) => {
   const runVideoBootstrapRef = useRef<
     ((targetTime: Time | undefined, preserveFrame: boolean) => Promise<boolean>) | null
   >(null);
+  /** Used by worker-driven recovery so it can reuse the active subscription. */
+  const requestVideoBootstrapRef = useRef<(() => void) | null>(null);
+  const lastPlaybackTimeNsRef = useRef<bigint | null>(null);
   const [status, setStatus] = useState<ImageSurfaceStatus>({ phase: 'idle' });
   const [metrics, setMetrics] = useState<ImageRenderMetrics | null>(null);
   const [annotationGap, setAnnotationGap] = useState(false);
@@ -193,10 +201,33 @@ export const ImagePanel: React.FC<ImagePanelProps> = (props) => {
       );
     }
 
+    const handleWorkerFailure = (message: string) => {
+      videoBootstrapGenerationRef.current += 1;
+      videoSeekRepairAbortRef.current?.abort();
+      videoSeekRepairAbortRef.current = null;
+      videoBufferedLiveRef.current = [];
+      videoBootstrapInFlightRef.current = false;
+      workerPendingRef.current = false;
+      reportRenderHealth();
+      const nextStatus: ImageSurfaceStatus = { phase: 'error', message };
+      lastUiStatusRef.current = nextStatus;
+      setStatus(nextStatus);
+    };
+    worker.onerror = (event) => {
+      handleWorkerFailure(event.message || 'Image worker crashed');
+    };
+    worker.onmessageerror = () => {
+      handleWorkerFailure('Image worker failed to deserialize a message');
+    };
+
     worker.onmessage = (event) => {
       const data = event.data as ImageRenderWorkerEvent;
       if (data.type === 'metrics') {
         setMetrics(data.metrics);
+        return;
+      }
+      if (data.type === 'needsBootstrap') {
+        requestVideoBootstrapRef.current?.();
         return;
       }
       if (data.type === 'renderHealth') {
@@ -213,13 +244,9 @@ export const ImagePanel: React.FC<ImagePanelProps> = (props) => {
         if (data.annotationState === 'gap') setAnnotationGap(true);
         return;
       }
-      if (data.type !== 'status') {
-        return;
-      }
+      if (data.type !== 'status') return;
       const nextStatus = data.status;
-      if (isUiStatusEqual(lastUiStatusRef.current, nextStatus)) {
-        return;
-      }
+      if (isUiStatusEqual(lastUiStatusRef.current, nextStatus)) return;
       lastUiStatusRef.current = nextStatus;
       setStatus(nextStatus);
     };
@@ -401,12 +428,11 @@ export const ImagePanel: React.FC<ImagePanelProps> = (props) => {
       annotationFallbackFailed = false;
     };
 
-
     deliverAnnotationPairsRef.current = deliverPairs;
 
     const handleVideoFrame = (event: RosMessageEvent) => {
       if (videoBootstrapInFlightRef.current) {
-        videoBufferedLiveRef.current.push(event);
+        pushVideoLiveEvent(videoBufferedLiveRef.current, event);
         reportRenderHealth();
         return;
       }
@@ -478,7 +504,6 @@ export const ImagePanel: React.FC<ImagePanelProps> = (props) => {
         }
         const targetNs = toNano(targetTime);
         const trailingLiveEvents = videoBufferedLiveRef.current
-          .slice(bootstrapLiveEvents.length)
           .filter((event) => toNano(event.receiveTime) > targetNs);
         videoBufferedLiveRef.current = [];
         setAnnotationWaiting(false);
@@ -487,18 +512,35 @@ export const ImagePanel: React.FC<ImagePanelProps> = (props) => {
           else queueFrameForRender(event);
         }
         return true;
+      } catch (error) {
+        if (controller.signal.aborted || generation !== videoBootstrapGenerationRef.current) {
+          return false;
+        }
+        console.warn('ImagePanel: video bootstrap failed', error);
+        setAnnotationWaiting(false);
+        return false;
       } finally {
-        if (
-          generation === videoBootstrapGenerationRef.current &&
-          videoSeekRepairAbortRef.current === controller
-        ) {
-          videoBootstrapInFlightRef.current = false;
-          videoSeekRepairAbortRef.current = null;
-          reportRenderHealth();
+        if (generation === videoBootstrapGenerationRef.current) {
+          videoBufferedLiveRef.current = [];
+          if (videoSeekRepairAbortRef.current === controller) {
+            videoBootstrapInFlightRef.current = false;
+            videoSeekRepairAbortRef.current = null;
+            reportRenderHealth();
+          }
         }
       }
     };
     runVideoBootstrapRef.current = runBootstrap;
+
+    // The worker requests a fresh bootstrap when its decoder has lost a usable
+    // reference chain. Seek to the nearest preceding random-access point rather
+    // than wait for an in-band keyframe that may not arrive soon.
+    requestVideoBootstrapRef.current = () => {
+      if (!videoOrderedModeRef.current || videoBootstrapInFlightRef.current) return;
+      const currentTime = player.getCurrentTime();
+      if (!currentTime) return;
+      void runBootstrap(currentTime, true);
+    };
 
     const activateVideoOrderedMode = async (triggerMessage?: RosMessageEvent) => {
       if (videoOrderedModeRef.current) {
@@ -506,7 +548,7 @@ export const ImagePanel: React.FC<ImagePanelProps> = (props) => {
         return;
       }
       videoOrderedModeRef.current = true;
-      if (triggerMessage) videoBufferedLiveRef.current.push(triggerMessage);
+      if (triggerMessage) pushVideoLiveEvent(videoBufferedLiveRef.current, triggerMessage);
       if (consumerModeRef.current !== 'all') {
         consumerModeRef.current = 'all';
         player.unregisterHighFrequencyConsumer(imageConsumerId);
@@ -569,6 +611,7 @@ export const ImagePanel: React.FC<ImagePanelProps> = (props) => {
       frameAnnotationPairerRef.current = null;
       deliverAnnotationPairsRef.current = null;
       runVideoBootstrapRef.current = null;
+      requestVideoBootstrapRef.current = null;
       player.unregisterHighFrequencyConsumer(imageConsumerId);
       if (pairer) player.unregisterHighFrequencyConsumer(annotationConsumerId);
       workerPendingRef.current = false;
@@ -600,6 +643,7 @@ export const ImagePanel: React.FC<ImagePanelProps> = (props) => {
     () =>
       player.subscribeSeek((time) => {
         renderHealthGenerationRef.current += 1;
+        lastPlaybackTimeNsRef.current = toNano(time);
         frameAnnotationPairerRef.current?.reset();
         videoBufferedLiveRef.current = [];
         workerPendingRef.current = false;
@@ -624,7 +668,7 @@ export const ImagePanel: React.FC<ImagePanelProps> = (props) => {
 
 
 
-  // Keep the worker's media deadline current without routing playback ticks through React state.
+  // Keep the worker's media clock current without routing playback ticks through React state.
   useEffect(() => {
     return player.subscribeCurrentTime((time) => {
       workerRef.current?.postMessage({
@@ -632,8 +676,23 @@ export const ImagePanel: React.FC<ImagePanelProps> = (props) => {
         currentTime: time,
         isPlaying,
       } satisfies ImageRenderWorkerRequest);
+      const nowNs = toNano(time);
+      const previousNs = lastPlaybackTimeNsRef.current;
+      if (previousNs != null && nowNs + 5_000_000n < previousNs) {
+        const worker = workerRef.current;
+        if (worker && topic && videoOrderedModeRef.current) {
+          void runVideoBootstrapRef.current?.(time, true);
+        } else {
+          worker?.postMessage({
+            type: 'reset',
+            preserveFrame: true,
+            generation: renderHealthGenerationRef.current,
+          } satisfies ImageRenderWorkerRequest);
+        }
+      }
+      lastPlaybackTimeNsRef.current = nowNs;
     });
-  }, [isPlaying, player]);
+  }, [isPlaying, player, topic]);
 
   // Send color/depth decode options when they change — triggers immediate redraw in worker
   useEffect(() => {
@@ -688,6 +747,9 @@ export const ImagePanel: React.FC<ImagePanelProps> = (props) => {
       data-video-media-lag-ms={metrics?.mediaLagMs}
       data-video-resync-count={metrics?.resyncCount}
       data-video-rendered-frames={metrics?.renderedFrames}
+      data-video-waiting-for-random-access={
+        metrics ? String(metrics.waitingForRandomAccess) : undefined
+      }
       data-annotation-state={
         selectedAnnotationTopic && annotationWaiting ? 'buffering' : renderedAnnotationState
       }
@@ -746,6 +808,9 @@ function getStatusText(status: ImageSurfaceStatus): string | null {
   if (status.phase === 'error') {
     return status.message ?? 'Image decode failed';
   }
+  if (status.phase === 'stalled') {
+    return status.message ?? 'Video stalled — recovering';
+  }
   if (status.phase === 'decoding' && !status.width && !status.height) {
     return 'Decoding latest frame...';
   }
@@ -777,6 +842,7 @@ function getAverageFrameIntervalMs(topicInfo: TopicInfo | undefined): number | u
   }
   return undefined;
 }
+
 
 function postImageFrame(
   worker: Worker,

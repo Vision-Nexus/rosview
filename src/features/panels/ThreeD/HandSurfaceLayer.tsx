@@ -1,6 +1,7 @@
 import type { Player } from '@/core/types/player';
-import { useLoader, useThree } from '@react-three/fiber';
-import { useEffect, useMemo, useRef } from 'react';
+import { useSceneObject, useThreeCanvas } from '@/features/panels/common/threeCanvas';
+import { use, useEffect, useMemo, useRef } from 'react';
+import { SkinnedMesh } from 'three';
 import { GLTFLoader, type GLTF } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { clone as cloneSkeleton } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import leftHandAssetUrl from './assets/generic-hand/left.glb?url';
@@ -14,8 +15,22 @@ import {
   isHandSurfaceSampleCurrent,
 } from './handSurface';
 
+// The baked GLBs share immutable geometry and materials; each panel clones its skeletons.
+let handAssets: Promise<GLTF[]> | undefined;
+
+function loadHandAssets(): Promise<GLTF[]> {
+  if (!handAssets) {
+    const loader = new GLTFLoader();
+    handAssets = Promise.all([
+      loader.loadAsync(leftHandAssetUrl),
+      loader.loadAsync(rightHandAssetUrl),
+    ]);
+  }
+  return handAssets;
+}
+
 export function HandSurfaceLayer({ player, panelId }: { player: Player; panelId: string }) {
-  const assets = useLoader(GLTFLoader, [leftHandAssetUrl, rightHandAssetUrl]) as GLTF[];
+  const assets = use(loadHandAssets());
   const rigs = useMemo(() => {
     try {
       return {
@@ -32,7 +47,7 @@ export function HandSurfaceLayer({ player, panelId }: { player: Player; panelId:
   const pointsRef = useRef(createHandPointState());
   const previousTimeRef = useRef<bigint | null>(null);
   const lastSampleTimeRef = useRef<bigint | null>(null);
-  const { invalidate } = useThree();
+  const { invalidate } = useThreeCanvas();
   const invalidateRef = useRef(invalidate);
 
   useEffect(() => {
@@ -84,12 +99,14 @@ export function HandSurfaceLayer({ player, panelId }: { player: Player; panelId:
     });
   }, [leftRig, player, rightRig]);
 
-  if (!leftRig || !rightRig) return null;
-
-  return (
-    <>
-      <primitive object={leftRig.root} />
-      <primitive object={rightRig.root} />
-    </>
-  );
+  useSceneObject(leftRig?.root ?? null);
+  useSceneObject(rightRig?.root ?? null);
+  useEffect(() => () => {
+    for (const rig of [leftRig, rightRig]) {
+      rig?.root.traverse((object) => {
+        if (object instanceof SkinnedMesh) object.skeleton.dispose();
+      });
+    }
+  }, [leftRig, rightRig]);
+  return null;
 }

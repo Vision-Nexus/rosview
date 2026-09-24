@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useReducer } from 'react';
+import { ThreeCanvasHarness } from '@/features/panels/common/threeCanvas/ThreeCanvasHarness';
 import { RosViewer } from '@/features/viewer/RosViewer';
 
 function useLocationSearchSync() {
@@ -32,6 +33,9 @@ function App() {
   const syncLocationSearch = useLocationSearchSync();
   const url = readSpaUrlFromQuery();
   const showPanelTopicBar = readPanelTopicBarVisibilityFromQuery();
+  if (import.meta.env.DEV && new URLSearchParams(window.location.search).has('threeCanvasHarness')) {
+    return <ThreeCanvasHarness />;
+  }
   return (
     <div style={{ width: '100vw', height: '100vh' }}>
       <RosViewer

@@ -8,15 +8,23 @@ import type {
   Subscription,
 } from '@/core/types/player';
 import { MAX_PLAYBACK_SPEED } from '@/core/types/player';
-import type { DataQualityReport, Time, Initialization, MessageEvent, TimeRange } from '@/core/types/ros';
+import type { DataQualityReport, Initialization, MessageEvent, PlayerProblem, Time, TimeRange } from '@/core/types/ros';
+import { messageBus } from '@/core/pipeline/messageBus';
+import { useMessagePipelineStore } from '@/core/pipeline/store';
 import type { ISourceHandle } from '@/infra/workers/ISourceHandle';
 import type { IMessageCursor, SourceInitProgress } from '@/infra/workers/types';
-import { addMs, toNano } from '@/shared/utils/time';
-import { useMessagePipelineStore } from '@/core/pipeline/store';
-import { messageBus } from '@/core/pipeline/messageBus';
+import { isTimeoutError, withTimeout } from '@/shared/utils/asyncTimeout';
 import type { Range } from '@/shared/utils/ranges';
+import { addMs, toNano } from '@/shared/utils/time';
 import { PlaybackClock } from './PlaybackClock';
 import { RenderBackpressure } from './RenderBackpressure';
+import {
+  PLAYBACK_BUFFER_PREPARE_AHEAD_MS,
+  PLAYBACK_CURSOR_CLOSE_TIMEOUT_MS,
+  PLAYBACK_RPC_TIMEOUT_MS,
+  PLAYBACK_SOURCE_FAILURE_THRESHOLD,
+  type IterablePlayerWatchdogOptions,
+} from './playbackWatchdog';
 
 const PIPELINE_EMIT_INTERVAL_MS = 200;
 const DEFAULT_SAMPLING_FPS = 30;
@@ -190,14 +198,31 @@ export class IterablePlayer implements Player {
   private _isRenderBuffering = false;
   private _clockHeld = false;
   private _renderBackpressure = new RenderBackpressure();
+  private _loadProgressRefreshInFlight = false;
+  private _preparePlaybackBufferInFlight = false;
+  private _preparePlaybackBufferQueued = false;
+  private _sourceFailureCount = 0;
+  private _playbackProblems: PlayerProblem[] = [];
+  private _rpcTimeoutMs = PLAYBACK_RPC_TIMEOUT_MS;
+  private _cursorCloseTimeoutMs = PLAYBACK_CURSOR_CLOSE_TIMEOUT_MS;
+  private _sourceFailureThreshold = PLAYBACK_SOURCE_FAILURE_THRESHOLD;
   private _topicLastMessageNs = new Map<string, bigint>();
   private _highFrequencyConsumerSignature = "";
   private _playbackEpoch = 0;
   private _debugEnabled =
     typeof window !== "undefined" && new URLSearchParams(window.location.search).get("debugPlayback") === "1";
 
-  constructor(source: ISourceHandle) {
+  constructor(source: ISourceHandle, options: IterablePlayerWatchdogOptions = {}) {
     this._source = source;
+    if (options.rpcTimeoutMs != undefined) {
+      this._rpcTimeoutMs = options.rpcTimeoutMs;
+    }
+    if (options.cursorCloseTimeoutMs != undefined) {
+      this._cursorCloseTimeoutMs = options.cursorCloseTimeoutMs;
+    }
+    if (options.sourceFailureThreshold != undefined) {
+      this._sourceFailureThreshold = options.sourceFailureThreshold;
+    }
     this._attachPageLifecycleListeners();
   }
 
@@ -208,7 +233,11 @@ export class IterablePlayer implements Player {
 
   subscribeCurrentTime(cb: (time: Time) => void): () => void {
     this._timeSubscribers.add(cb);
-    cb(this._currentTime);
+    try {
+      cb(this._currentTime);
+    } catch (err) {
+      console.warn("IterablePlayer: current-time subscriber failed", err);
+    }
     return () => {
       this._timeSubscribers.delete(cb);
     };
@@ -404,13 +433,17 @@ export class IterablePlayer implements Player {
     const topics = this._currentTopics();
     if (topics.length === 0) return;
     try {
-      const messages = await this._source.getBackfillMessages({
-        time: referenceTime,
-        topics,
-      });
+      const messages = await this._withSourceTimeout(
+        this._source.getBackfillMessages({
+          time: referenceTime,
+          topics,
+        }),
+        "playback backfill timed out",
+      );
       if (!this._isPlaybackEpochCurrent(epoch)) {
         return;
       }
+      this._sourceFailureCount = 0;
       this._distributeMessages(messages, referenceTime);
       this._lastPipelineEmitMs = 0;
       this._emitState();
@@ -522,7 +555,10 @@ export class IterablePlayer implements Player {
     if (this._state.presence === "ready") {
       this._startLoadProgressPolling();
       void this._refreshLoadProgress();
+      void this._preparePlaybackBuffer();
     }
+    this._sourceFailureCount = 0;
+    this._setPlaybackProblem(undefined);
     this._emitState();
     this._scheduleNextTick();
   }
@@ -573,6 +609,7 @@ export class IterablePlayer implements Player {
     this._notifySeekSubscribers(seekTime);
     this._notifyTimeSubscribers(seekTime);
     this._lastPipelineEmitMs = 0;
+    void this._preparePlaybackBuffer();
     this._emitState();
     this._prioritizePlaybackBuffer(epoch, seekTime);
 
@@ -581,16 +618,16 @@ export class IterablePlayer implements Player {
       if (!this._isPlaybackEpochCurrent(epoch)) {
         return;
       }
-
-      if (!this._isPlaybackEpochCurrent(epoch)) {
-        return;
-      }
       const topics = this._currentTopics();
       if (topics.length > 0) {
-        const messages = await this._source.getBackfillMessages({ time: seekTime, topics });
+        const messages = await this._withSourceTimeout(
+          this._source.getBackfillMessages({ time: seekTime, topics }),
+          "playback backfill timed out",
+        );
         if (!this._isPlaybackEpochCurrent(epoch)) {
           return;
         }
+        this._sourceFailureCount = 0;
         this._distributeMessages(messages, seekTime);
       }
     } catch (err) {
@@ -739,7 +776,7 @@ export class IterablePlayer implements Player {
     }
     this._playbackCursorCloseGate = this._playbackCursorCloseGate.then(async () => {
       try {
-        await cursor.end();
+        await withTimeout(cursor.end(), this._cursorCloseTimeoutMs, "playback cursor close timed out");
       } catch (err) {
         console.warn("IterablePlayer: playback cursor close failed", err);
       }
@@ -751,7 +788,7 @@ export class IterablePlayer implements Player {
     const pendingCreation = this._playbackCursorCreationPromise;
     if (pendingCreation) {
       try {
-        await pendingCreation;
+        await withTimeout(pendingCreation, this._rpcTimeoutMs, "playback cursor creation timed out");
       } catch {
         // Cursor creation errors are reported by the owning prefetch request.
       }
@@ -827,7 +864,11 @@ export class IterablePlayer implements Player {
 
   private _notifyTimeSubscribers(time: Time): void {
     for (const cb of this._timeSubscribers) {
-      cb(time);
+      try {
+        cb(time);
+      } catch (err) {
+        console.warn("IterablePlayer: current-time subscriber failed", err);
+      }
     }
   }
 
@@ -878,7 +919,11 @@ export class IterablePlayer implements Player {
     this._syncActiveDataSlice({ includeCurrentTime: true });
 
     if (this._listener) {
-      this._listener(this._state);
+      try {
+        this._listener(this._state);
+      } catch (err) {
+        console.warn("IterablePlayer: player listener failed", err);
+      }
     }
     useMessagePipelineStore.getState().setPlayerState(this._state);
   }
@@ -1083,81 +1128,87 @@ export class IterablePlayer implements Player {
 
   private async _tickAsync(): Promise<void> {
     if (!this._isPlaying || this._pageSuspended) return;
-    const now = performance.now();
-    const slowRead =
-      this._prefetchStartedAtMs != undefined &&
-      now - this._prefetchStartedAtMs >= PLAYBACK_BUFFERING_DELAY_MS;
-    if (slowRead && this._prefetchedMessages.length === 0) {
-      this._setSourceBuffering(true, true);
-      this._ensurePlaybackPrefetch(this._playbackEpoch, this._currentTime);
-      this._scheduleNextTick();
-      return;
-    }
+    try {
+      const now = performance.now();
+      const slowRead =
+        this._prefetchStartedAtMs != undefined &&
+        now - this._prefetchStartedAtMs >= PLAYBACK_BUFFERING_DELAY_MS;
+      if (slowRead && this._prefetchedMessages.length === 0) {
+        this._setSourceBuffering(true, true);
+        this._ensurePlaybackPrefetch(this._playbackEpoch, this._currentTime);
+        return;
+      }
 
-    const tickDurationMs = 1000 / this._samplingFps;
-    if (now - this._lastTickWallMs < tickDurationMs) {
-      this._scheduleNextTick();
-      return;
-    }
+      const tickDurationMs = 1000 / this._samplingFps;
+      if (now - this._lastTickWallMs < tickDurationMs) {
+        return;
+      }
 
-    const epoch = this._playbackEpoch;
-    const nextTime = this._clampToRange(this._clock.getTime(now));
-    this._updateRenderBuffering(nextTime, now);
-    if (this._isRenderBuffering || this._sourceClockHeld) {
-      this._scheduleNextTick();
-      return;
-    }
-    this._lastTickWallMs = now;
-    const currentNs = toNano(this._currentTime);
-    const nextNs = toNano(nextTime);
-    if (nextNs <= currentNs) {
-      this._scheduleNextTick();
-      return;
-    }
-    this._currentTime = nextTime;
-    this._clock.seek(this._currentTime, performance.now());
-    this._drainPrefetchedMessages(this._currentTime);
-    this._scheduleStaleTopicsRefresh(now, epoch);
+      const epoch = this._playbackEpoch;
+      const nextTime = this._clampToRange(this._clock.getTime(now));
+      this._updateRenderBuffering(nextTime, now);
+      if (this._isRenderBuffering || this._sourceClockHeld) {
+        return;
+      }
+      this._lastTickWallMs = now;
+      const currentNs = toNano(this._currentTime);
+      const nextNs = toNano(nextTime);
+      if (nextNs <= currentNs) {
+        return;
+      }
+      this._currentTime = nextTime;
+      this._clock.seek(this._currentTime, performance.now());
+      this._drainPrefetchedMessages(this._currentTime);
+      this._scheduleStaleTopicsRefresh(now, epoch);
 
-    if (this._initialization && toNano(this._currentTime) >= toNano(this._initialization.end)) {
-      if (this._isLooping) {
-        const loopEpoch = this._advancePlaybackEpoch();
-        this._currentTime = this._initialization.start;
-        this._clock.seek(this._currentTime, performance.now());
-        this._resetRenderHealth(performance.now());
-        this._prioritizePlaybackBuffer(loopEpoch, this._currentTime);
-        await this._closePlaybackCursor();
-        if (!this._isPlaybackEpochCurrent(loopEpoch)) {
-          return;
-        }
-        // Match seek: notify rewind first so H264 panels can reset/wait for IDR
-        // before backfill or live frames arrive after configure().
-        this._notifySeekSubscribers(this._currentTime);
-        this._notifyTimeSubscribers(this._currentTime);
-        const topics = this._currentTopics();
-        if (topics.length > 0) {
-          const messages = await this._source.getBackfillMessages({ time: this._currentTime, topics });
+      if (this._initialization && toNano(this._currentTime) >= toNano(this._initialization.end)) {
+        if (this._isLooping) {
+          const loopEpoch = this._advancePlaybackEpoch();
+          this._currentTime = this._initialization.start;
+          this._clock.seek(this._currentTime, performance.now());
+          this._resetRenderHealth(performance.now());
+          this._prioritizePlaybackBuffer(loopEpoch, this._currentTime);
+          await this._closePlaybackCursor();
           if (!this._isPlaybackEpochCurrent(loopEpoch)) {
             return;
           }
-          this._distributeMessages(messages, this._currentTime);
+          // Match seek: notify rewind first so H264 panels can reset/wait for IDR
+          // before backfill or live frames arrive after configure().
+          this._notifySeekSubscribers(this._currentTime);
+          this._notifyTimeSubscribers(this._currentTime);
+          const topics = this._currentTopics();
+          if (topics.length > 0) {
+            const messages = await this._withSourceTimeout(
+              this._source.getBackfillMessages({ time: this._currentTime, topics }),
+              "playback backfill timed out",
+            );
+            if (!this._isPlaybackEpochCurrent(loopEpoch)) {
+              return;
+            }
+            this._sourceFailureCount = 0;
+            this._distributeMessages(messages, this._currentTime);
+          }
+          this._emitState();
+          return;
         }
-        this._emitState();
-        this._scheduleNextTick();
+        this._currentTime = this._initialization.end;
+        this._clock.seek(this._currentTime, performance.now());
+        this.pause();
+        this._notifyTimeSubscribers(this._currentTime);
         return;
       }
-      this._currentTime = this._initialization.end;
-      this._clock.seek(this._currentTime, performance.now());
-      this.pause();
+
+      this._ensurePlaybackPrefetch(epoch, nextTime);
       this._notifyTimeSubscribers(this._currentTime);
-      return;
+      this._maybeEmitPipelineState();
+    } catch (err) {
+      console.warn("IterablePlayer: playback tick failed", err);
+      this._noteSourceFailure(err);
+    } finally {
+      if (this._isPlaying && !this._pageSuspended) {
+        this._scheduleNextTick();
+      }
     }
-
-    this._ensurePlaybackPrefetch(epoch, nextTime);
-    this._notifyTimeSubscribers(this._currentTime);
-    this._maybeEmitPipelineState();
-
-    this._scheduleNextTick();
   }
 
   private _playbackPrefetchTargetAheadMs(): number {
@@ -1331,7 +1382,13 @@ export class IterablePlayer implements Player {
           this._playbackCursorCreationPromise = creationPromise;
           let cursor: IMessageCursor<unknown>;
           try {
-            cursor = await creationPromise;
+            cursor = await this._withSourceTimeout(
+              creationPromise,
+              "playback cursor creation timed out",
+              (lateCursor) => {
+                void this._enqueuePlaybackCursorClose(lateCursor);
+              },
+            );
           } finally {
             if (this._playbackCursorCreationPromise === creationPromise) {
               this._playbackCursorCreationPromise = undefined;
@@ -1351,10 +1408,13 @@ export class IterablePlayer implements Player {
 
       const cursor = this._cursor;
       const capacity = Math.max(1, PLAYBACK_PREFETCH_MAX_MESSAGES - this._prefetchedMessages.length);
-      const messages = await cursor.nextBatch(durationMs, {
-        endTime,
-        maxMessages: capacity,
-      });
+      const messages = await this._withSourceTimeout(
+        cursor.nextBatch(durationMs, {
+          endTime,
+          maxMessages: capacity,
+        }),
+        "playback nextBatch timed out",
+      );
       if (
         !this._isPlaybackEpochCurrent(epoch) ||
         this._prefetchRequestId !== requestId ||
@@ -1364,6 +1424,7 @@ export class IterablePlayer implements Player {
       }
       // A completed window, including an empty one, no longer needs to hold playback.
       this._setSourceBuffering(false);
+      this._sourceFailureCount = 0;
       const requestedTopics = new Set(topics);
       const selectedMessages = messages.filter(
         (message) =>
@@ -1390,6 +1451,7 @@ export class IterablePlayer implements Player {
     } catch (err) {
       if (this._isPlaybackEpochCurrent(epoch) && this._prefetchRequestId === requestId) {
         console.error("Failed to fetch messages", err);
+        this._noteSourceFailure(err);
       }
     }
   }
@@ -1427,6 +1489,74 @@ export class IterablePlayer implements Player {
     this._updateBufferingProgress();
     if (this._state.presence === "ready") {
       this._emitState();
+    }
+  }
+
+  private async _withSourceTimeout<T>(
+    promise: Promise<T>,
+    message: string,
+    onLateValue?: (value: T) => void,
+  ): Promise<T> {
+    return withTimeout(promise, this._rpcTimeoutMs, message, onLateValue);
+  }
+
+  private _noteSourceFailure(error: unknown): void {
+    if (!isTimeoutError(error)) {
+      return;
+    }
+    this._sourceFailureCount += 1;
+    if (this._sourceFailureCount < this._sourceFailureThreshold) {
+      return;
+    }
+    this._setPlaybackProblem({
+      severity: "error",
+      message: error.message,
+    });
+    this.pause();
+  }
+
+  private _setPlaybackProblem(problem: PlayerProblem | undefined): void {
+    this._playbackProblems = problem ? [problem] : [];
+    this._state.progress = {
+      ...this._state.progress,
+      playbackError: problem?.message,
+    };
+    if (this._state.activeData) {
+      this._state.activeData = {
+        ...this._state.activeData,
+        problems: [...(this._initialization?.problems ?? []), ...this._playbackProblems],
+      };
+    }
+  }
+
+  private async _preparePlaybackBuffer(): Promise<void> {
+    if (this._state.presence !== "ready") {
+      return;
+    }
+    const topics = this._currentTopics();
+    if (topics.length === 0) return;
+    if (this._preparePlaybackBufferInFlight) {
+      this._preparePlaybackBufferQueued = true;
+      return;
+    }
+    this._preparePlaybackBufferInFlight = true;
+    this._preparePlaybackBufferQueued = false;
+    try {
+      if (typeof this._source.preparePlaybackBuffer !== "function") {
+        return;
+      }
+      await this._source.preparePlaybackBuffer({
+        time: this._currentTime,
+        topics,
+        minAheadMs: PLAYBACK_BUFFER_PREPARE_AHEAD_MS,
+      });
+    } catch (err) {
+      console.warn("IterablePlayer: preparePlaybackBuffer failed", err);
+    } finally {
+      this._preparePlaybackBufferInFlight = false;
+      if (this._preparePlaybackBufferQueued && this._state.presence === "ready") {
+        void this._preparePlaybackBuffer();
+      }
     }
   }
 
@@ -1474,7 +1604,8 @@ export class IterablePlayer implements Player {
   }
 
   private async _refreshLoadProgress(): Promise<void> {
-    if (this._state.presence !== "ready") return;
+    if (this._state.presence !== "ready" || this._loadProgressRefreshInFlight) return;
+    this._loadProgressRefreshInFlight = true;
     try {
       const progress = await this._source.getLoadProgress();
       const now = performance.now();
@@ -1523,6 +1654,7 @@ export class IterablePlayer implements Player {
         prefetchTargetAheadMs: this._playbackPrefetchTargetAheadMs(),
         prefetchLowWaterMs: this._playbackPrefetchLowWaterMs(this._playbackPrefetchTargetAheadMs()),
         prefetchInFlight: this._prefetchPromise != undefined,
+        playbackError: this._state.progress.playbackError,
         dataQualityReport,
       };
       const prevProgress = this._state.progress;
@@ -1547,6 +1679,7 @@ export class IterablePlayer implements Player {
         nextProgress.prefetchTargetAheadMs === prevProgress.prefetchTargetAheadMs &&
         nextProgress.prefetchLowWaterMs === prevProgress.prefetchLowWaterMs &&
         nextProgress.prefetchInFlight === prevProgress.prefetchInFlight &&
+        nextProgress.playbackError === prevProgress.playbackError &&
         isSameDataQualityReport(nextProgress.dataQualityReport, prevProgress.dataQualityReport) &&
         isSameRanges(nextProgress.downloadedByteRanges, prevProgress.downloadedByteRanges) &&
         isSameTimeRanges(nextProgress.parsedMessageRanges, prevProgress.parsedMessageRanges);
@@ -1557,6 +1690,8 @@ export class IterablePlayer implements Player {
       useMessagePipelineStore.getState().setPlayerState(this._state);
     } catch (err) {
       console.warn("IterablePlayer: load progress refresh failed", err);
+    } finally {
+      this._loadProgressRefreshInFlight = false;
     }
   }
 
@@ -1643,7 +1778,7 @@ export class IterablePlayer implements Player {
    * worker cursor produces them so callers can render partial results.
    */
   async *streamMessagesInTimeRange(args: StreamMessagesInTimeRangeArgs): AsyncIterable<MessageEvent[]> {
-    if (!this._initialization || args.topics.length === 0) {
+    if (!this._initialization || args.topics.length === 0 || args.signal?.aborted) {
       return;
     }
     const start = this._clampToRange(args.start);
@@ -1674,7 +1809,7 @@ export class IterablePlayer implements Player {
     let emitted = 0;
     try {
       for (;;) {
-        if (emitted >= maxMessages) {
+        if (args.signal?.aborted || emitted >= maxMessages) {
           break;
         }
         const batch = await cursor.nextBatch(86_400_000, {
