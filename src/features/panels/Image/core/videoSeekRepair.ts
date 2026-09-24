@@ -1,6 +1,7 @@
 import type { Player } from '@/core/types/player';
 import type { MessageEvent as RosMessageEvent, Time } from '@/core/types/ros';
 import { addMs, toNano } from '@/shared/utils/time';
+import { withTimeout } from '@/shared/utils/asyncTimeout';
 import type { ImageAnnotationsFrame } from './imageAnnotations';
 import type { ImageRenderWorkerRequest, ImageWorkerFrameEnvelope } from './imageWorkerProtocol';
 import {
@@ -17,8 +18,11 @@ import {
 import { selectLatestCompleteVideoGop } from './videoQueue';
 
 export const VIDEO_SEEK_WINDOWS_MS = [2000, 5000, 10_000, 30_000] as const;
-export const VIDEO_SEEK_MAX_FRAMES = 180;
+/** Keep complete GOPs with long keyframe intervals rather than truncate dependencies. */
+export const VIDEO_SEEK_MAX_FRAMES = 600;
 export const VIDEO_BOOTSTRAP_FORWARD_MS = 2_000;
+export const VIDEO_BOOTSTRAP_DEADLINE_MS = 15_000;
+export const VIDEO_BOOTSTRAP_WINDOW_TIMEOUT_MS = 5_000;
 
 function compareReceiveTime(left: RosMessageEvent, right: RosMessageEvent): number {
   const difference = toNano(left.receiveTime) - toNano(right.receiveTime);
@@ -177,12 +181,20 @@ async function fetchVideoBootstrapFrames(
   const coverageEnd = options.coverageEndTime ?? targetTime;
   const queryEnd = addMs(coverageEnd, VIDEO_BOOTSTRAP_FORWARD_MS);
   const topics = options.annotationTopic ? [topic, options.annotationTopic] : [topic];
+  const deadline = Date.now() + VIDEO_BOOTSTRAP_DEADLINE_MS;
   for (const windowMs of VIDEO_SEEK_WINDOWS_MS) {
-    const messages = await player.getMessagesInTimeRange({
-      start: addMs(targetTime, -windowMs),
-      end: queryEnd,
-      topics,
-    });
+    if (options.signal?.aborted || Date.now() >= deadline) return null;
+    const remainingMs = Math.max(1, deadline - Date.now());
+    const messages = await withTimeout(
+      player.getMessagesInTimeRange({
+        start: addMs(targetTime, -windowMs),
+        end: queryEnd,
+        topics,
+        signal: options.signal,
+      }),
+      Math.min(VIDEO_BOOTSTRAP_WINDOW_TIMEOUT_MS, remainingMs),
+      'Video bootstrap range read timed out',
+    );
     if (options.signal?.aborted) return null;
     const videoMessages = messages.filter((event) => event.topic === topic);
     const codec = options.codec ?? videoMessages.map(videoCodecForMessageEvent).find(Boolean) ?? null;

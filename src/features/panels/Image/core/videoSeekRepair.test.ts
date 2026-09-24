@@ -157,6 +157,18 @@ describe('video bootstrap admission', () => {
     ).resolves.toBe(false);
   });
 
+  it('keeps long H.264 and H.265 GOP prefixes intact', () => {
+    const h264Gop = Array.from({ length: 257 }, (_, index) =>
+      event(index + 1, 'h264', index === 0 ? h264Key : h264Delta),
+    );
+    const h265Gop = Array.from({ length: 257 }, (_, index) =>
+      event(index + 1, 'h265', index === 0 ? h265Key : h265Delta),
+    );
+
+    expect(selectVideoSeekRepairFrames(h264Gop, { sec: 257, nsec: 0 }, 'h264')).toHaveLength(257);
+    expect(selectVideoSeekRepairFrames(h265Gop, { sec: 257, nsec: 0 }, 'h265')).toHaveLength(257);
+  });
+
   it('marks a missing exact bootstrap annotation as a data gap', async () => {
     const onAnnotationGap = vi.fn();
     const posts: Array<{ frames?: Array<{ annotation?: unknown }> }> = [];
