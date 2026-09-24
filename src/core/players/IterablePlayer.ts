@@ -1450,6 +1450,11 @@ export class IterablePlayer implements Player {
       }
     } catch (err) {
       if (this._isPlaybackEpochCurrent(epoch) && this._prefetchRequestId === requestId) {
+        if (isTimeoutError(err) && this._cursor) {
+          // The timed-out call still owns the iterator. A retry needs a fresh cursor
+          // so the orphan cannot consume and discard the retry's messages.
+          void this._enqueuePlaybackCursorClose(this._cursor);
+        }
         console.error("Failed to fetch messages", err);
         this._noteSourceFailure(err);
       }

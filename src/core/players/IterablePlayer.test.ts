@@ -2045,6 +2045,50 @@ describe('IterablePlayer playback watchdogs', () => {
     }
   });
 
+  it('replays the pending window after a timeout instead of letting an orphan read swallow it', async () => {
+    const clock = installFakePlaybackClock();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const ready = deferred<void>();
+    const frame = makeImageMessageAtMs(250);
+    const cursors: MessageCursor[] = [];
+    const source = makeSource([]);
+    vi.mocked(source.getMessageCursor).mockImplementation(async () => {
+      const cursor = new MessageCursor((async function* () {
+        await ready.promise;
+        yield frame;
+      })(), { mode: 'comlink', binaryPayloadThresholdBytes: 64 * 1024 });
+      cursors.push(cursor);
+      return cursor;
+    });
+    const player = new IterablePlayer(source, { rpcTimeoutMs: 20, cursorCloseTimeoutMs: 20 });
+    try {
+      await player.initialize({});
+      player.registerSubscriptions('panel', [{ topic: TOPIC, subscriberId: 'panel' }]);
+      await vi.advanceTimersByTimeAsync(0);
+      player.play();
+      clock.now = 100;
+      clock.runNextRaf();
+      await vi.advanceTimersByTimeAsync(50);
+
+      clock.now = 150;
+      clock.runNextRaf();
+      await vi.advanceTimersByTimeAsync(0);
+      ready.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+      clock.now = 300;
+      clock.runNextRaf();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(messageBus.getSubscriberMessages('panel')).toEqual([frame]);
+    } finally {
+      ready.resolve();
+      player.close();
+      await vi.advanceTimersByTimeAsync(0);
+      await Promise.all(cursors.map((cursor) => cursor.end()));
+      vi.useRealTimers();
+      clock.restore();
+    }
+  });
+
   it('pauses with a retryable error after repeated nextBatch timeouts', async () => {
     const clock = installFakePlaybackClock();
     const source = makeSource([]);

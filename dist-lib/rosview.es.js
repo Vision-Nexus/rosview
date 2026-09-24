@@ -23551,7 +23551,7 @@ var zD = class {
 				bufferedMessages: this._prefetchedMessages.length
 			}));
 		} catch (n) {
-			this._isPlaybackEpochCurrent(e) && this._prefetchRequestId === t && (console.error("Failed to fetch messages", n), this._noteSourceFailure(n));
+			this._isPlaybackEpochCurrent(e) && this._prefetchRequestId === t && (Jt(n) && this._cursor && this._enqueuePlaybackCursorClose(this._cursor), console.error("Failed to fetch messages", n), this._noteSourceFailure(n));
 		}
 	}
 	_drainPrefetchedMessages(e) {
