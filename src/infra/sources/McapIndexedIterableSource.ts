@@ -215,23 +215,13 @@ export class McapIndexedIterableSource implements IIterableSource {
     const messages: MessageEvent[] = [];
 
     for (const topic of args.topics) {
-      // First try: look backwards from current time for the most recent message.
+      // Backfill restores only data at or before the playhead; later topics stay empty.
       const backIterator = this._reader.readMessages({
         endTime: time,
         topics: [topic],
         reverse: true,
       });
-      let raw = await workerPerf.timeAsync("mcap.backfill.readNext", () => backIterator.next());
-
-      // If no message exists at or before this time (e.g. seeking near the start),
-      // fall forward to find the first available message for this topic.
-      if (raw.done && this._end != null) {
-        const fwdIterator = this._reader.readMessages({
-          startTime: time,
-          topics: [topic],
-        });
-        raw = await workerPerf.timeAsync("mcap.backfill.readNext", () => fwdIterator.next());
-      }
+      const raw = await workerPerf.timeAsync("mcap.backfill.readNext", () => backIterator.next());
 
       if (!raw.done) {
         const message = raw.value as McapReadMessage;

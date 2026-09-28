@@ -23895,7 +23895,7 @@ async function $D(e) {
 		let { default: e } = await import("./hdf5.worker-CownL8T1.js");
 		return new e();
 	}
-	let { default: t } = await import("./mcap.worker-CeRsu8tZ.js");
+	let { default: t } = await import("./mcap.worker-BZQlsAhL.js");
 	return new t();
 }
 async function eO(e, t, n) {
@@ -25210,7 +25210,7 @@ async function* uk(e) {
 		sk(e.signal);
 		let s = await ck(XD(), e.signal);
 		sk(e.signal);
-		let { default: c } = await ck(import("./mcap.worker-CeRsu8tZ.js"), e.signal);
+		let { default: c } = await ck(import("./mcap.worker-BZQlsAhL.js"), e.signal);
 		for (a = new HE(new c()), e.signal?.addEventListener("abort", l, { once: !0 }), await ck(a.initialize({
 			url: e.url,
 			knownTotalBytes: e.totalBytes,

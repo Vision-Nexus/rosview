@@ -113,6 +113,9 @@ topics. A cursor read stays pending until it can return messages, prove the requ
 or reach the end of the source. A completed empty window does not show buffering or hold the clock.
 Image panels without a frame show "No image at the current time". Slow source reads and pending render
 work can still hold playback until that work finishes.
+MCAP backfill returns only the latest message at or before the playhead for each topic. If a video
+stream starts later, backfill leaves it empty instead of delivering a future frame to the decoder;
+that frame belongs to normal playback when its log time arrives.
 If a read exceeds the RPC deadline, the player retires that cursor before reopening from the current
 playhead. A timeout does not cancel the old read, so reusing its cursor could silently lose messages.
 
