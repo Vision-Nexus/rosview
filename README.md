@@ -75,6 +75,8 @@ npm run dev          # development server at http://localhost:5173
 npm run build        # production SPA → dist/
 ```
 
+CI runs the same audit, lint, build, unit, library-build and E2E checks for every pull request, including stacked PRs targeting another feature branch. Push CI remains limited to `main`.
+
 ---
 
 ## Embedding (npm package)

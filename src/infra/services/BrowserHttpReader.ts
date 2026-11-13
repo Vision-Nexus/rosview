@@ -93,21 +93,26 @@ export class BrowserHttpReader implements HttpReader {
       return;
     }
 
-    // Range GET (bytes=0-0): works with presigned GET URLs (HEAD uses a different signature).
+    // A bounded two-byte GET also works with presigned GET URLs (unlike HEAD).
+    // Avoid an end offset of zero: some static servers, including Vite's bundled
+    // sirv, interpret that as an open-ended range. Validate the exact response;
+    // a one-byte object may legitimately clamp the end to zero.
     // Requires bucket CORS ExposeHeaders to include Content-Range and/or Content-Length.
-    const probe = await this.#fetchWithRetry(this._url, { headers: { Range: 'bytes=0-0' } });
+    const probeLength = Math.min(2, this._maxRangeRequestSizeInBytes);
+    const probe = await this.#fetchWithRetry(this._url, { headers: { Range: `bytes=0-${probeLength - 1}` } });
     if (!probe.ok && probe.status !== 206) {
       throw new Error(`Failed to fetch ${this._url}: ${probe.status} ${probe.statusText}`);
     }
     if (probe.status === 206) {
       const contentRange = parseContentRange(probe.headers.get('Content-Range'));
-      if (!contentRange || contentRange.start !== 0 || contentRange.end !== 0) {
+      if (!contentRange || contentRange.start !== 0 || contentRange.end !== Math.min(probeLength, contentRange.size) - 1) {
         throw new Error(`Invalid Content-Range for size probe from ${this._url}`);
       }
-      this.#assertContentLength(probe, 1);
+      const expectedLength = contentRange.end + 1;
+      this.#assertContentLength(probe, expectedLength);
       const body = new Uint8Array(await probe.arrayBuffer());
-      if (body.byteLength !== 1) {
-        throw new Error(`Invalid size probe length from ${this._url}: expected 1 byte, got ${body.byteLength}`);
+      if (body.byteLength !== expectedLength) {
+        throw new Error(`Invalid size probe length from ${this._url}: expected ${expectedLength} bytes, got ${body.byteLength}`);
       }
       this._size = contentRange.size;
     } else if (probe.ok) {
