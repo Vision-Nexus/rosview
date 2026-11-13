@@ -20,7 +20,7 @@ export interface CompressedImageMessage {
   data: Uint8Array;
 }
 
-/** foxglove_msgs/msg/CompressedVideo — Annex B H264/H265/VP9/AV1 bitstream chunks. */
+/** foxglove_msgs/msg/CompressedVideo — codec-specific compressed video chunks. */
 export interface CompressedVideoMessage {
   timestamp?: Time;
   frame_id?: string;
@@ -155,6 +155,7 @@ export type CompressedImageKind =
   | 'bmp'
   | 'h264'
   | 'h265'
+  | 'av1'
   | null;
 
 export type CompressedDepthCodec = 'png' | 'rvl';

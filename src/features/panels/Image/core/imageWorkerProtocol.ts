@@ -2,6 +2,7 @@ import type { Time } from '@/core/types/ros';
 import type { RawImageDecodeOptions } from './imageColorMode';
 import type { ImageSurfaceStatus } from './imageTypes';
 import type { VideoPressureMode } from './videoBackpressure';
+import type { VideoCodec } from './videoCodec';
 import type { ImageAnnotationsFrame } from './imageAnnotations';
 
 export interface ImageRenderOptions {
@@ -74,7 +75,7 @@ export type ImageRenderWorkerRequest =
     }
   | {
       type: 'bootstrapVideo';
-      codec: 'h264' | 'h265';
+      codec: VideoCodec;
       frames: ImageWorkerFrameEnvelope[];
       preserveFrame?: boolean;
       generation: number;

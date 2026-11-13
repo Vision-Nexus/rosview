@@ -3,15 +3,11 @@
 import type { Time } from '@/core/types/ros';
 import { decodeCompressedDepth } from './compressedDepthDecoder';
 import { decodeRawImage } from './rawDecoders';
+import { WorkerVideoDecoder } from './workerVideoDecoder';
 import {
   type VideoCodec,
-  containsVideoRandomAccessNal,
-  containsVideoVclNal,
+  containsVideoRandomAccess,
   isVideoConfigOnly,
-  monotonicVideoTimestampUs,
-  streamCodecIdentity,
-  videoChunkType,
-  videoCodecCandidates,
   videoCodecFromFormat,
 } from './videoCodec';
 import {
@@ -85,7 +81,6 @@ const DEFAULT_VIEWPORT: ImageViewport = {
 };
 
 const OUTPUT_TIMEOUT_MS = 5000;
-const WECODECS_CONFIG_TIMEOUT_MS = 3000;
 const METRICS_INTERVAL_MS = 1000;
 const VIDEO_RESYNC_COOLDOWN_MS = 200;
 /** Minimum spacing between bootstrap requests sent to the panel. */
@@ -94,203 +89,6 @@ const VIDEO_BOOTSTRAP_REQUEST_COOLDOWN_MS = 1500;
 const VIDEO_RANDOM_ACCESS_WAIT_TIMEOUT_MS = 500;
 /** Report stalled playback instead of leaving a silent frozen canvas. */
 const VIDEO_STALL_REPORT_MS = 4000;
-
-// ---------- H.264 / H.265 decoder ----------
-
-class WorkerVideoDecoder {
-  #decoder: VideoDecoder | null = null;
-  #lastTimestampUs = -1;
-  #configuredCodec: string | null = null;
-  #streamCodec: string | null = null;
-  #codecKind: VideoCodec | null = null;
-  #generation = 0;
-  #submitted = new Map<number, {
-    frame: ImageWorkerFrameEnvelope;
-    startedAt: number;
-    queueDepth: number;
-    generation: number;
-  }>();
-  #callbacks: {
-    output: (output: {
-      videoFrame: VideoFrame;
-      sourceFrame: ImageWorkerFrameEnvelope;
-      decodeMs: number;
-    }) => void;
-    error: (error: Error) => void;
-    dequeue: () => void;
-  };
-
-  public constructor(callbacks: {
-    output: (output: {
-      videoFrame: VideoFrame;
-      sourceFrame: ImageWorkerFrameEnvelope;
-      decodeMs: number;
-    }) => void;
-    error: (error: Error) => void;
-    dequeue: () => void;
-  }) {
-    this.#callbacks = callbacks;
-  }
-
-  public dispose(): void {
-    this.reset();
-    this.#lastTimestampUs = -1;
-  }
-
-  public reset(): void {
-    this.#generation += 1;
-    if (this.#decoder && this.#decoder.state !== 'closed') this.#decoder.close();
-    this.#decoder = null;
-    this.#configuredCodec = null;
-    this.#streamCodec = null;
-    this.#codecKind = null;
-    this.#submitted.clear();
-  }
-
-  public get codec(): string | undefined {
-    return this.#configuredCodec ?? undefined;
-  }
-
-  public get decodeQueueSize(): number {
-    return this.#decoder?.state === 'configured' ? this.#decoder.decodeQueueSize : 0;
-  }
-
-  public get hasPendingWork(): boolean {
-    return this.#submitted.size > 0 || this.decodeQueueSize > 0;
-  }
-
-  public sweepPending(): void {
-    this.#sweepSubmitted();
-  }
-
-  public async submitFrame(
-    frame: ImageWorkerFrameEnvelope,
-    data: Uint8Array<ArrayBuffer>,
-    sortTimeKey: bigint,
-  ): Promise<void> {
-    if (typeof VideoDecoder === 'undefined') throw new Error('WebCodecs VideoDecoder is not supported');
-    const codec = frame.kind === 'compressed' ? videoCodecFromFormat(frame.format) : null;
-    if (!codec) throw new Error('Compressed frame does not declare H.264 or H.265');
-
-    const parsedCodec = streamCodecIdentity(codec, data);
-    if (
-      this.#decoder &&
-      this.#decoder.state !== 'closed' &&
-      ((this.#codecKind !== null && codec !== this.#codecKind) ||
-        (parsedCodec && parsedCodec !== this.#streamCodec))
-    ) {
-      this.reset();
-    }
-    const generation = this.#generation;
-    if (!(await this.#ensureDecoder(codec, data, parsedCodec, generation))) return;
-    const decoder = this.#decoder!;
-    const timestamp = monotonicVideoTimestampUs(sortTimeKey, this.#lastTimestampUs);
-    this.#lastTimestampUs = timestamp;
-    if (containsVideoVclNal(codec, data)) {
-      this.#submitted.set(timestamp, {
-        frame,
-        startedAt: performance.now(),
-        queueDepth: decoder.decodeQueueSize,
-        generation,
-      });
-    }
-    try {
-      decoder.decode(new EncodedVideoChunk({
-        type: videoChunkType(codec, data),
-        timestamp,
-        data,
-      }));
-    } catch (error) {
-      this.#submitted.delete(timestamp);
-      throw error;
-    }
-    this.#sweepSubmitted();
-  }
-
-  #sweepSubmitted(now = performance.now()): void {
-    for (const [timestamp, submitted] of this.#submitted) {
-      if (now - submitted.startedAt <= OUTPUT_TIMEOUT_MS) {
-        continue;
-      }
-      this.#submitted.delete(timestamp);
-      this.#callbacks.error(new Error('Video decode timed out'));
-      return;
-    }
-  }
-
-  async #ensureDecoder(
-    codec: VideoCodec,
-    data: Uint8Array<ArrayBuffer>,
-    parsedCodec: string | null,
-    generation: number,
-  ): Promise<boolean> {
-    if (this.#decoder && this.#decoder.state !== 'closed') return true;
-
-    let supportedConfig: VideoDecoderConfig | null = null;
-    for (const codecString of videoCodecCandidates(codec, data)) {
-      const candidates: VideoDecoderConfig[] = [
-        { codec: codecString, hardwareAcceleration: 'prefer-hardware', optimizeForLatency: true },
-        { codec: codecString, hardwareAcceleration: 'no-preference', optimizeForLatency: true },
-      ];
-      for (const candidate of candidates) {
-        try {
-          const support = await withTimeout(
-            VideoDecoder.isConfigSupported(candidate),
-            WECODECS_CONFIG_TIMEOUT_MS,
-            'VideoDecoder.isConfigSupported timed out',
-          );
-          if (generation !== this.#generation) return false;
-          if (support.supported) {
-            supportedConfig = support.config ?? candidate;
-            break;
-          }
-        } catch {
-          // Some implementations throw for an unsupported codec or acceleration mode.
-        }
-      }
-      if (supportedConfig) break;
-    }
-    if (!supportedConfig) {
-      const label = codec === 'h264' ? 'H.264' : 'H.265';
-      throw new Error(`${label} codec ${parsedCodec ?? 'fallback candidates'} is not supported`);
-    }
-
-    this.#decoder = new VideoDecoder({
-      output: (frame) => {
-        const submitted = this.#submitted.get(frame.timestamp);
-        this.#submitted.delete(frame.timestamp);
-        if (!submitted || submitted.generation !== this.#generation) {
-          frame.close();
-          return;
-        }
-        this.#callbacks.output({
-          videoFrame: frame,
-          sourceFrame: submitted.frame,
-          // Elapsed time also covers the wait behind frames already queued in
-          // the decoder, so amortise it to approximate per-frame decode cost.
-          // Without this the sample tracks pipeline latency and permanently
-          // reports overload on healthy multi-stream playback.
-          decodeMs: (performance.now() - submitted.startedAt) / (submitted.queueDepth + 1),
-        });
-      },
-      error: (error) => this.#callbacks.error(new Error(String(error))),
-    });
-    this.#decoder.addEventListener('dequeue', this.#callbacks.dequeue);
-    try {
-      this.#decoder.configure(supportedConfig);
-      this.#configuredCodec = supportedConfig.codec;
-      this.#streamCodec = parsedCodec;
-      this.#codecKind = codec;
-    } catch (error) {
-      this.#decoder.close();
-      this.#decoder = null;
-      this.#configuredCodec = null;
-      this.#codecKind = null;
-      throw error;
-    }
-    return true;
-  }
-}
 
 // ---------- Cached frame state ----------
 
@@ -531,7 +329,7 @@ class ImageRenderWorkerRuntime {
       .slice(0, VIDEO_SEEK_MAX_FRAMES);
     if (
       videoFrames.length === 0 ||
-      !videoFrames.some((frame) => containsVideoRandomAccessNal(codec, frame.data))
+      !videoFrames.some((frame) => containsVideoRandomAccess(codec, frame.data))
     ) {
       this.#beginWaitForRandomAccess();
       this.#emitMetricsIfDue(true);
@@ -572,7 +370,7 @@ class ImageRenderWorkerRuntime {
     );
     if (live) this.#trackVideoCadence(frame, codec);
 
-    if (this.#videoWaitingForRandomAccess && !containsVideoRandomAccessNal(codec, frame.data)) {
+    if (this.#videoWaitingForRandomAccess && !containsVideoRandomAccess(codec, frame.data)) {
       if (isVideoConfigOnly(codec, frame.data)) {
         this.#videoConfigBeforeRandomAccess = updateVideoConfigPackets(
           codec,
@@ -589,7 +387,7 @@ class ImageRenderWorkerRuntime {
       return;
     }
 
-    if (containsVideoRandomAccessNal(codec, frame.data)) {
+    if (containsVideoRandomAccess(codec, frame.data)) {
       this.#clearWaitForRandomAccess();
       if (this.#videoConfigBeforeRandomAccess.length > 0) {
         this.#pendingVideoFrames.push(...this.#videoConfigBeforeRandomAccess);
@@ -615,7 +413,7 @@ class ImageRenderWorkerRuntime {
     const gapMs = Number(frameTimeNs - previousNs) / 1_000_000;
     if (gapMs <= 0) return;
     if (
-      !containsVideoRandomAccessNal(codec, frame.data) &&
+      !containsVideoRandomAccess(codec, frame.data) &&
       isVideoStreamDiscontinuity(gapMs, this.#videoFrameIntervalMs)
     ) {
       this.#droppedVideoFrames += this.#pendingVideoFrames.length;
@@ -820,7 +618,7 @@ class ImageRenderWorkerRuntime {
         const kind = getCompressedKind(frame.format);
         const sortKey = timeToKey(frame.receiveTime);
 
-        if (kind === 'h264' || kind === 'h265') {
+        if (kind === 'h264' || kind === 'h265' || kind === 'av1') {
           await this.#decoder.submitFrame(frame, bytes, sortKey);
           if (epoch !== this.#epoch) return;
           this.#updateVideoPressure();

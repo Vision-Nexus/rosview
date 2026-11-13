@@ -41,7 +41,9 @@ Supports **MCAP**, **ROS 1 bag**, **ROS 2 db3**, **HDF5**, and **BVH** files. Av
 - **Zero-copy parsing** — dedicated Web Workers + Comlink; main thread is never blocked
 - **HTTP Range streaming** — load remote files without downloading them in full
 - **Multi-panel layout** — draggable, dockable panels powered by DockView
-- **Visualization panels** — Image (JPEG/PNG/H.264/H.265; HEVC needs browser WebCodecs support), 3D (point clouds, URDF, TF), Plot (uPlot), Joints, Map, Audio, RawMessages, TopicGraph, Pose
+- **Visualization panels** — Image (JPEG/PNG/H.264/H.265/AV1; compressed video needs browser WebCodecs support), 3D (point clouds, URDF, TF), Plot (uPlot), Joints, Map, Audio, RawMessages, TopicGraph, Pose
+
+AV1 `CompressedVideo` messages use the low-overhead OBU format, one temporal unit per message. Every random-access key message must carry its Sequence Header before its displayed key frame; IVF/MP4 wrappers and header-only messages are not key frames. Rosview derives the codec configuration from that header, keeps tracks independent, and replays from a complete key on seek/recovery. If advertised AV1 hardware decoding fails at runtime, it retries with the browser's native software decoder from a fresh key; this is not video transcoding. Availability and multi-stream throughput depend on the browser/device.
 - **Internationalization** — English · Simplified Chinese · Japanese
 - **Dark / light / system** theme
 - **Extension API** — register third-party sidebar tabs and playback-track overlay regions

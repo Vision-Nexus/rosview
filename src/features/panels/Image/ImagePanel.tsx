@@ -239,6 +239,8 @@ export const ImagePanel: React.FC<ImagePanelProps> = (props) => {
       if (data.type === 'rendered') {
         if (data.generation !== renderHealthGenerationRef.current) return;
         renderedTimeRef.current = fromNano(data.timestampNs);
+        // Exact painted-frame diagnostics without a React render for every frame.
+        if (canvasRef.current) canvasRef.current.dataset.frameTimeNs = data.timestampNs.toString();
         reportRenderHealth();
         setRenderedAnnotationState(data.annotationState);
         if (data.annotationState === 'gap') setAnnotationGap(true);

@@ -39,7 +39,9 @@
 - **Worker 解析** — 专用 Web Worker + Comlink；主线程尽量不被阻塞
 - **HTTP Range 流式加载** — 无需整文件下载即可开始回放
 - **多面板布局** — 基于 DockView 的可拖拽、可停靠面板
-- **可视化面板** — 图像（JPEG/PNG/H.264/H.265；HEVC 需要浏览器提供 WebCodecs 支持）、3D（点云、URDF、TF）、Plot（uPlot）、关节、地图、音频、RawMessages、TopicGraph、位姿
+- **可视化面板** — 图像（JPEG/PNG/H.264/H.265/AV1；压缩视频需要浏览器提供 WebCodecs 支持）、3D（点云、URDF、TF）、Plot（uPlot）、关节、地图、音频、RawMessages、TopicGraph、位姿
+
+AV1 `CompressedVideo` 使用 low-overhead OBU 格式，每条消息一个 temporal unit。每个可随机访问的关键帧消息必须在显示关键帧前携带 Sequence Header；IVF/MP4 封装和只有配置的消息不能作为关键帧。Rosview 从码流配置解码器，逐轨独立维护状态，并在 seek/恢复时从完整关键帧重放。如果浏览器声称支持 AV1 硬件解码但实际失败，会从新关键帧改用浏览器原生软件解码，不进行视频转码。可用性和多路吞吐取决于浏览器及设备。
 - **Foxglove 布局兼容** — 导入 / 导出 Foxglove Studio 布局
 - **国际化** — English · 简体中文 · 日本語
 - **明 / 暗 / 跟随系统** 主题
