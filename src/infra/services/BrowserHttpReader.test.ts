@@ -18,6 +18,48 @@ afterEach(() => {
 });
 
 describe('BrowserHttpReader', () => {
+  it.each([1, 2, 16])('probes a %i-byte object with a strictly checked two-byte GET', async (size) => {
+    const fetchMock = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      expect(new Headers(init?.headers).get('Range')).toBe('bytes=0-1');
+      expect(init?.method ?? 'GET').toBe('GET');
+      return rangeResponse(0, Math.min(1, size - 1), size);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const reader = new BrowserHttpReader('https://example.test/signed-get');
+    await reader.initialize();
+    expect(reader.size()).toBe(size);
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it('honors a one-byte request cap without accepting an oversized probe response', async () => {
+    const fetchMock = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      expect(new Headers(init?.headers).get('Range')).toBe('bytes=0-0');
+      return rangeResponse(0, 0, 16);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const reader = new BrowserHttpReader('https://example.test/data', { maxRangeRequestSizeInBytes: 1 });
+    await reader.initialize();
+    expect(reader.size()).toBe(16);
+    fetchMock.mockResolvedValueOnce(rangeResponse(0, 1, 16));
+    const invalid = new BrowserHttpReader('https://example.test/data', { maxRangeRequestSizeInBytes: 1 });
+    await expect(invalid.initialize()).rejects.toThrow('Invalid Content-Range');
+  });
+
+  it.each([
+    ['wrong start', 'bytes 1-2/16', new Uint8Array(2), '2', 'Invalid Content-Range'],
+    ['oversized range', 'bytes 0-15/16', new Uint8Array(16), '16', 'Invalid Content-Range'],
+    ['short range', 'bytes 0-0/16', new Uint8Array(1), '1', 'Invalid Content-Range'],
+    ['wrong declared length', 'bytes 0-1/16', new Uint8Array(2), '16', 'Invalid Content-Length'],
+    ['short body', 'bytes 0-1/16', new Uint8Array(1), '2', 'Invalid size probe length'],
+  ] as const)('rejects a size probe with %s', async (_label, contentRange, body, contentLength, error) => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(body, {
+      status: 206,
+      headers: { 'Content-Range': contentRange, 'Content-Length': contentLength },
+    })));
+    const reader = new BrowserHttpReader('https://example.test/data');
+    await expect(reader.initialize()).rejects.toThrow(error);
+  });
+
   it('splits wide reads into bounded HTTP ranges and preserves byte order', async () => {
     const requestedRanges: string[] = [];
     vi.stubGlobal(

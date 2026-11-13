@@ -74,6 +74,8 @@ npm run dev          # 开发服务器 http://localhost:5173
 npm run build        # 生产 SPA → dist/
 ```
 
+所有 pull request（包括以其他功能分支为目标的 stacked PR）都会运行相同的依赖审计、lint、构建、单元测试、库构建及 E2E 检查；push CI 仍仅针对 `main`。
+
 ---
 
 ## 嵌入（npm 包）
