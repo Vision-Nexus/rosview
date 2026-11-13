@@ -12,7 +12,7 @@ import {
 import { parseExactImageAnnotations } from './frameAnnotationPairer';
 import {
   type VideoCodec,
-  containsVideoRandomAccessNal,
+  containsVideoRandomAccess,
   videoCodecFromFormat,
 } from './videoCodec';
 import { selectLatestCompleteVideoGop } from './videoQueue';
@@ -53,7 +53,7 @@ export function findFirstVideoRandomAccessReceiveTime(
   for (const event of sortByReceiveTime(messages)) {
     if (videoCodecForMessageEvent(event) !== codec) continue;
     const payload = getVideoMessagePayload(event);
-    if (payload && containsVideoRandomAccessNal(codec, payload)) return event.receiveTime;
+    if (payload && containsVideoRandomAccess(codec, payload)) return event.receiveTime;
   }
   return undefined;
 }
@@ -66,7 +66,7 @@ export function preparedBootstrapContainsRandomAccess(
     (frame) =>
       frame.kind === 'compressed' &&
       videoCodecFromFormat(frame.format) === codec &&
-      containsVideoRandomAccessNal(codec, frame.data),
+      containsVideoRandomAccess(codec, frame.data),
   );
 }
 
@@ -86,7 +86,7 @@ export function selectVideoSeekRepairFrames(
     const data = getVideoMessagePayload(event);
     return data ? [{ event, data }] : [];
   });
-  if (!candidates.some(({ data }) => containsVideoRandomAccessNal(codec, data))) return [];
+  if (!candidates.some(({ data }) => containsVideoRandomAccess(codec, data))) return [];
   return limitVideoSeekRepairFrames(
     codec,
     selectLatestCompleteVideoGop(codec, candidates).frames,
@@ -119,7 +119,7 @@ export function limitVideoSeekRepairFrames<T extends { data: Uint8Array }>(
   frames: readonly T[],
 ): T[] {
   const randomAccessIndex = frames.findIndex(({ data }) =>
-    containsVideoRandomAccessNal(codec, data),
+    containsVideoRandomAccess(codec, data),
   );
   return randomAccessIndex < 0 || randomAccessIndex >= VIDEO_SEEK_MAX_FRAMES
     ? []

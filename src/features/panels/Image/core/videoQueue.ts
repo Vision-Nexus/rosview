@@ -1,6 +1,6 @@
 import {
   type VideoCodec,
-  containsVideoRandomAccessNal,
+  containsVideoRandomAccess,
   isVideoConfigOnly,
   scanVideoNalTypes,
   videoConfigStartsGeneration,
@@ -39,6 +39,9 @@ export function updateVideoConfigPackets<T extends VideoQueueEntry>(
   frame: T,
 ): T[] {
   if (!isVideoConfigOnly(codec, frame.data)) return [...packets];
+  // AV1 random-access chunks must carry their own Sequence Header. Never prepend
+  // header-only messages as standalone EncodedVideoChunks after a decoder reset.
+  if (codec === 'av1') return [];
   if (codec === 'h264' || scanVideoNalTypes(codec, frame.data).includes(32)) {
     return videoConfigStartsGeneration(codec, frame.data) ? [frame] : [...packets, frame];
   }
@@ -72,11 +75,7 @@ export function selectLatestCompleteVideoGop<T extends VideoQueueEntry>(
     };
   }
 
-  const randomAccessNalTypes = scanVideoNalTypes(codec, frames[latestRandomAccessIndex].data);
-  const randomAccessHasConfig =
-    codec === 'h264'
-      ? randomAccessNalTypes.includes(7)
-      : randomAccessNalTypes.includes(32) || randomAccessNalTypes.includes(33);
+  const randomAccessHasConfig = videoConfigStartsGeneration(codec, frames[latestRandomAccessIndex].data);
   const inQueueConfig = randomAccessHasConfig
     ? []
     : findLatestCompleteConfig(codec, frames, latestRandomAccessIndex);
@@ -96,7 +95,7 @@ function findLatestRandomAccessIndex<T extends VideoQueueEntry>(
   frames: readonly T[],
 ): number {
   for (let index = frames.length - 1; index >= 0; index -= 1) {
-    if (containsVideoRandomAccessNal(codec, frames[index].data)) return index;
+    if (containsVideoRandomAccess(codec, frames[index].data)) return index;
   }
   return -1;
 }
@@ -106,6 +105,7 @@ function findLatestCompleteConfig<T extends VideoQueueEntry>(
   frames: readonly T[],
   endIndex: number,
 ): T[] {
+  if (codec === 'av1') return [];
   let startIndex = -1;
   for (let index = endIndex - 1; index >= 0; index -= 1) {
     const frame = frames[index];

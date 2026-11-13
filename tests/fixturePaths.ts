@@ -11,6 +11,9 @@ export const MCAP_POSE = path.join(EXAMPLES_DIR, 'test_pose.mcap');
 export const MCAP_3CAM = path.join(EXAMPLES_DIR, 'test_3cam.mcap');
 export const MCAP_H264 = path.join(EXAMPLES_DIR, 'test_h264.mcap');
 export const MCAP_H265 = path.join(EXAMPLES_DIR, 'test_h265.mcap');
+export const MCAP_AV1_8BIT = path.join(EXAMPLES_DIR, 'test_av1_svt8.mcap');
+export const MCAP_AV1_10BIT = path.join(EXAMPLES_DIR, 'test_av1_aom10.mcap');
+export const MCAP_AV1_MIXED = path.join(EXAMPLES_DIR, 'test_av1_mixed.mcap');
 export const MCAP_COMPRESSED_DEPTH = path.join(EXAMPLES_DIR, 'test_compressed_depth.mcap');
 export const MCAP_H264_PAIR_CAMERAS = Array.from({ length: 5 }, (_, camera) =>
   path.join(EXAMPLES_DIR, `test_h264_pair_camera${camera}.mcap`),
